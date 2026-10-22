@@ -4,13 +4,17 @@ import { Platform, Pressable, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
 import { fetchUnreadCount } from '@/api/notifications';
+import { useAuth } from '@/hooks/use-auth';
 
 /** Bell icon with unread badge – navigates to /notifications */
 function NotificationBell() {
   const router = useRouter();
+  // REV-A1: chỉ đếm khi đã đăng nhập
+  const { user } = useAuth();
   const { data: unreadCount } = useQuery({
     queryKey: ['unread-count'],
     queryFn: fetchUnreadCount,
+    enabled: !!user,
     refetchInterval: 30_000, // poll every 30s
   });
 

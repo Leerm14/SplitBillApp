@@ -1,135 +1,325 @@
 /**
- * Xử lý hàng đợi offline — gửi lại khi có mạng, exponential backoff.
+ * Xử lý hàng đợi offline theo DEV mục 6 (APP-08):
+ * 1. Ghi vào hàng đợi TRƯỚC (kèm idempotency_key), rồi mới thử gửi ngay.
+ * 2. Gửi được → SYNCED. Lỗi mạng / 5xx / xác thực → giữ PENDING ("Chưa đồng bộ"), thử lại có backoff
+ *    tính từ lần thử cuối. Lỗi nghiệp vụ → không thử lại, báo người dùng.
+ * 3. Mỗi lần gửi lại dùng đúng key cũ nên server trả bản ghi đã có thay vì tạo mới.
  */
 
 import NetInfo from '@react-native-community/netinfo';
-import { getPendingItems, markSynced, markFailed, retryItem, getQueueItem } from './queue';
-import { createExpense } from '@/api/expenses';
-import { createPayment, confirmPayment, rejectPayment, disputePayment, cancelPayment } from '@/api/payments';
-import { supabase } from '@/lib/supabase';
 
-type ActionHandler = (payload: any) => Promise<any>;
+import { getSession } from '@/api/auth';
+import { getServerErrorCode } from '@/api/errors';
+import { createExpense, type ExpenseShareInput } from '@/api/expenses';
+import {
+  cancelPayment,
+  confirmPayment,
+  createPayment,
+  disputePayment,
+  fetchPayment,
+  rejectPayment,
+} from '@/api/payments';
+import { formatVND } from '@/domain/money';
 
-const ACTION_HANDLERS: Record<string, ActionHandler> = {
-  create_expense: (p) => createExpense(p),
-  // SEC-01: Use RPC for create_payment
-  create_payment: async (params) => {
-    const { data, error } = await supabase.rpc('create_payment', params);
-    if (error) throw error;
-    return data;
-  },
-  confirm_payment: (p) => confirmPayment(p.paymentId),
-  reject_payment: (p) => rejectPayment(p.paymentId, p.reason),
-  dispute_payment: (p) => disputePayment(p.paymentId, p.reason),
-  cancel_payment: (p) => cancelPayment(p.paymentId),
+import { classifyFailure, isDueForAttempt, queueItemAgeMs } from './policy';
+import {
+  cleanupOldItems,
+  discardForeignItems,
+  discardItem,
+  enqueue,
+  getPendingItems,
+  getQueueGeneration,
+  getQueueItem,
+  markAttemptFailed,
+  markFailed,
+  markSynced,
+  type QueueItem,
+} from './queue';
+
+// ----------------------------
+// Payload của từng loại thao tác
+// ----------------------------
+
+export type CreateExpensePayload = {
+  groupId: string;
+  paidBy: string;
+  amount: number;
+  description: string;
+  shares: ExpenseShareInput[];
+  idempotencyKey: string;
+  splitMethod: string;
+  note?: string;
 };
 
-/** Lỗi nghiệp vụ (không retry) vs lỗi mạng (retry) */
-function isNetworkError(error: any): boolean {
-  const msg = String(error?.message || '').toLowerCase();
-  return (
-    msg.includes('network') ||
-    msg.includes('timeout') ||
-    msg.includes('fetch') ||
-    msg.includes('failed to fetch') ||
-    msg.includes('aborted') ||
-    msg.includes('econnrefused')
-  );
-}
+export type CreatePaymentPayload = {
+  groupId: string;
+  toId: string;
+  amount: number;
+  note?: string;
+  idempotencyKey: string;
+};
+
+export type PaymentActionPayload = {
+  paymentId: string;
+  groupId?: string;
+  reason?: string;
+};
+
+export type QueueActionMap = {
+  create_expense: CreateExpensePayload;
+  create_payment: CreatePaymentPayload;
+  confirm_payment: PaymentActionPayload;
+  reject_payment: PaymentActionPayload;
+  dispute_payment: PaymentActionPayload;
+  cancel_payment: PaymentActionPayload;
+};
+
+export type QueueAction = keyof QueueActionMap;
+
+type ActionHandler = (payload: any) => Promise<unknown>;
+
+/** Trạng thái thanh toán sau khi thao tác đã áp dụng — để nhận ra lần gửi trước đã tới server. */
+const PAYMENT_TARGET_STATUS: Partial<Record<QueueAction, string>> = {
+  confirm_payment: 'CONFIRMED',
+  reject_payment: 'REJECTED',
+  dispute_payment: 'DISPUTED',
+  cancel_payment: 'CANCELLED',
+};
+
+const ACTION_HANDLERS: Record<QueueAction, ActionHandler> = {
+  create_expense: (p: CreateExpensePayload) => createExpense(p),
+  // NEW-04: Payload trong hàng đợi dùng camelCase — đổi sang tham số của createPayment
+  create_payment: (p: CreatePaymentPayload) =>
+    createPayment({
+      group_id: p.groupId,
+      to_id: p.toId,
+      amount: p.amount,
+      note: p.note,
+      idempotency_key: p.idempotencyKey,
+    }),
+  confirm_payment: (p: PaymentActionPayload) => confirmPayment(p.paymentId),
+  reject_payment: (p: PaymentActionPayload) => rejectPayment(p.paymentId, p.reason),
+  dispute_payment: (p: PaymentActionPayload) => disputePayment(p.paymentId, p.reason ?? ''),
+  cancel_payment: (p: PaymentActionPayload) => cancelPayment(p.paymentId),
+};
 
 /**
- * APP-03: Determine if error is a business error (should not be retried).
- * 5xx and auth errors are retryable, not business errors.
+ * respond/dispute/cancel không có idempotency key ở server: nếu lần gửi trước đã tới server
+ * (request timeout nhưng đã xử lý), lần gửi lại nhận NOT_PENDING/INVALID_STATUS.
+ * Khi đó đọc lại thanh toán — đúng trạng thái đích thì coi như đã đồng bộ.
  */
-function isBusinessError(message: string): boolean {
-  // 5xx and auth errors are retryable
-  const retryablePatterns = ['500', '502', '503', '504', 'jwt', 'token', 'refresh'];
-  if (retryablePatterns.some(p => message.toLowerCase().includes(p))) {
+async function alreadyApplied(action: string, payload: any, error: unknown): Promise<boolean> {
+  const target = PAYMENT_TARGET_STATUS[action as QueueAction];
+  if (!target) return false;
+  const code = getServerErrorCode(error);
+  if (code !== 'NOT_PENDING' && code !== 'INVALID_STATUS') return false;
+  try {
+    const p = await fetchPayment(payload.paymentId);
+    return p.status === target;
+  } catch {
     return false;
   }
+}
 
-  const businessPatterns = [
-    'not a member',
-    'permission denied',
-    'already exists',
-    'invalid',
-    'không phải thành viên',
-    'không có quyền',
-    'version_conflict',
-    'CLOSED',
-  ];
-  return businessPatterns.some((p) => message.toLowerCase().includes(p));
+/** Các mục đang được gửi — lượt đồng bộ nền bỏ qua để không gửi trùng */
+const inFlight = new Set<number>();
+
+type SendOutcome =
+  | { kind: 'synced'; result: unknown }
+  | { kind: 'retry'; error: unknown; message: string }
+  | { kind: 'fail'; error: unknown; message: string };
+
+async function sendItem(
+  item: Pick<QueueItem, 'id' | 'action' | 'payload' | 'retries'> & Partial<Pick<QueueItem, 'created_at' | 'pending_since'>>,
+): Promise<SendOutcome> {
+  const handler = ACTION_HANDLERS[item.action as QueueAction];
+  if (!handler) {
+    const message = `Hành động không xác định: ${item.action}`;
+    await markFailed(item.id, message);
+    return { kind: 'fail', error: new Error(message), message };
+  }
+
+  inFlight.add(item.id);
+  try {
+    const payload = JSON.parse(item.payload);
+    try {
+      const result = await handler(payload);
+      await markSynced(item.id);
+      return { kind: 'synced', result };
+    } catch (error) {
+      if (await alreadyApplied(item.action, payload, error)) {
+        await markSynced(item.id);
+        return { kind: 'synced', result: null };
+      }
+      // REV-A3: lỗi tạm thời cũng có giới hạn số lần / thời gian chờ
+      const decision = classifyFailure(error, item.retries, queueItemAgeMs(item, Date.now()));
+      if (decision.kind === 'retry') {
+        await markAttemptFailed(item.id, decision.message);
+        return { kind: 'retry', error, message: decision.message };
+      }
+      await markFailed(item.id, decision.message);
+      return { kind: 'fail', error, message: decision.message };
+    }
+  } finally {
+    inFlight.delete(item.id);
+  }
+}
+
+export type SubmitResult<T = unknown> =
+  | { status: 'synced'; result: T }
+  | { status: 'queued' };
+
+/**
+ * APP-08: Ghi vào hàng đợi trước, rồi thử gửi ngay.
+ * - Gửi được → { status: 'synced', result }
+ * - Lỗi mạng/tạm thời → { status: 'queued' }: màn hình báo "Chưa đồng bộ", hàng đợi tự gửi lại
+ * - Lỗi nghiệp vụ → bỏ mục khỏi hàng đợi và ném lỗi để màn hình báo người dùng sửa
+ */
+export async function submitAction<A extends QueueAction>(
+  action: A,
+  payload: QueueActionMap[A],
+  idempotencyKey: string,
+  userId: string,
+): Promise<SubmitResult> {
+  const id = await enqueue(action, payload, idempotencyKey, userId);
+  const outcome = await sendItem({ id, action, payload: JSON.stringify(payload), retries: 0 });
+  if (outcome.kind === 'synced') return { status: 'synced', result: outcome.result };
+  if (outcome.kind === 'retry') return { status: 'queued' };
+  // Người dùng đang ở màn hình và thấy lỗi ngay → không để lại mục FAILED trùng thông báo
+  await discardItem(id);
+  throw outcome.error;
+}
+
+// ----------------------------
+// Đồng bộ nền
+// ----------------------------
+
+export type ProcessResult = { synced: number; failed: number; skipped: number };
+
+/** REV-A2: Phiên hiện tại có đúng là của userId không (đọc phiên đã lưu, không gọi mạng). */
+async function isCurrentUser(userId: string): Promise<boolean> {
+  try {
+    const session = await getSession();
+    return session?.user?.id === userId;
+  } catch {
+    return false;
+  }
+}
+
+async function runQueue(userId: string, gen: number): Promise<ProcessResult> {
+  const result: ProcessResult = { synced: 0, failed: 0, skipped: 0 };
+  // REV-A2: hàng đợi bị xóa (đăng xuất) hoặc phiên đã đổi người → dừng ngay
+  const stillValid = async () => getQueueGeneration() === gen && (await isCurrentUser(userId));
+
+  const netState = await NetInfo.fetch();
+  if (netState.isConnected === false) return result;
+  if (!(await stillValid())) return result;
+
+  // APP-02: Không bao giờ gửi thao tác của tài khoản khác bằng phiên hiện tại
+  await discardForeignItems(userId);
+
+  const items = await getPendingItems(userId);
+  const now = Date.now();
+
+  for (const snapshot of items) {
+    if (!(await stillValid())) break;
+    // REV-A2: danh sách đọc lúc đầu có thể đã cũ (mục bị bỏ, đã gửi ở màn hình, hàng đợi bị xóa)
+    // → đọc lại từng mục ngay trước khi gửi
+    const item = await getQueueItem(snapshot.id);
+    if (!item || item.status !== 'PENDING' || item.user_id !== userId) {
+      result.skipped++;
+      continue;
+    }
+    if (inFlight.has(item.id) || !isDueForAttempt(item, now)) {
+      result.skipped++;
+      continue;
+    }
+    const outcome = await sendItem(item);
+    if (outcome.kind === 'synced') result.synced++;
+    else if (outcome.kind === 'fail') result.failed++;
+    else result.skipped++;
+  }
+
+  await cleanupOldItems();
+  return result;
+}
+
+// APP-03: Khóa ở module — mọi nơi gọi processQueue dùng chung một lượt đang chạy.
+// REV-A2: chỉ dùng chung khi cùng tài khoản và cùng thế hệ hàng đợi.
+type Run = { userId: string; gen: number; promise: Promise<ProcessResult> };
+let running: Run | null = null;
+// REV-A9: lượt chạy tiếp theo đã hẹn (sau lượt đang chạy) — gộp các yêu cầu trùng
+let queuedRun: { userId: string; promise: Promise<ProcessResult> } | null = null;
+
+function startRun(userId: string): Promise<ProcessResult> {
+  const gen = getQueueGeneration();
+  const promise = runQueue(userId, gen).finally(() => {
+    if (running?.promise === promise) running = null;
+  });
+  running = { userId, gen, promise };
+  return promise;
 }
 
 /**
- * APP-03: Safe markFailed that doesn't overwrite SYNCED status.
+ * Xử lý các mục đang chờ của `userId`. Gọi đồng thời sẽ dùng chung một lượt.
+ * REV-A9: `followUp` (ví dụ sau khi bấm "Thử lại") — nếu đang có lượt chạy thì hẹn thêm một lượt
+ * ngay sau nó, để mục vừa được thử lại chắc chắn được gửi.
  */
-async function safeMarkFailed(id: number, message: string): Promise<void> {
-  // APP-03: Don't overwrite SYNCED status
-  const current = await getQueueItem(id);
-  if (current?.status === 'SYNCED') return;
+export function processQueue(userId: string, opts: { followUp?: boolean } = {}): Promise<ProcessResult> {
+  if (!running) return startRun(userId);
+  const reusable = running.userId === userId && running.gen === getQueueGeneration() && !opts.followUp;
+  if (reusable) return running.promise;
+  if (queuedRun && queuedRun.userId === userId) return queuedRun.promise;
 
-  await markFailed(id, message);
+  const promise: Promise<ProcessResult> = running.promise
+    .catch(() => undefined)
+    .then(() => {
+      if (queuedRun?.promise === promise) queuedRun = null;
+      return processQueue(userId);
+    });
+  queuedRun = { userId, promise };
+  return promise;
 }
 
-/** Xử lý tất cả mục đang chờ */
-export async function processQueue(): Promise<{ synced: number; failed: number; skipped: number }> {
-  const netState = await NetInfo.fetch();
-  if (!netState.isConnected) {
-    return { synced: 0, failed: 0, skipped: 0 };
+
+
+// ----------------------------
+// Hiển thị
+// ----------------------------
+
+/** Mô tả ngắn một mục hàng đợi cho người dùng */
+export function describeQueueItem(item: Pick<QueueItem, 'action' | 'payload'>): string {
+  let p: any = {};
+  try {
+    p = JSON.parse(item.payload);
+  } catch {
+    // payload hỏng — vẫn hiện tên thao tác
   }
-
-  const items = await getPendingItems();
-  let synced = 0;
-  let failed = 0;
-  let skipped = 0;
-
-  for (const item of items) {
-    const handler = ACTION_HANDLERS[item.action];
-    if (!handler) {
-      await safeMarkFailed(item.id, `Hành động không xác định: ${item.action}`);
-      failed++;
-      continue;
-    }
-
-    // Exponential backoff: bỏ qua nếu retry quá sớm
-    if (item.retries > 0) {
-      const backoffMs = Math.min(1000 * Math.pow(2, item.retries), 300_000); // max 5 phút
-      const createdMs = new Date(item.created_at).getTime();
-      if (Date.now() - createdMs < backoffMs) {
-        skipped++;
-        continue;
-      }
-    }
-
-    try {
-      const payload = JSON.parse(item.payload);
-      await handler(payload);
-      await markSynced(item.id);
-      synced++;
-    } catch (error: any) {
-      const errorMsg = error.message || 'Lỗi không xác định';
-      if (isNetworkError(error)) {
-        // Lỗi mạng — tăng retry count nhưng giữ PENDING
-        await safeMarkFailed(item.id, 'Lỗi kết nối mạng');
-        if (item.retries < 10) {
-          await retryItem(item.id);
-        }
-        skipped++;
-      } else if (isBusinessError(errorMsg)) {
-        // Lỗi nghiệp vụ — đánh dấu FAILED, không thử lại
-        await safeMarkFailed(item.id, errorMsg);
-        failed++;
-      } else {
-        // Unknown error — retry
-        await safeMarkFailed(item.id, errorMsg);
-        if (item.retries < 10) {
-          await retryItem(item.id);
-        }
-        skipped++;
-      }
-    }
+  const amount = typeof p.amount === 'number' ? ` ${formatVND(p.amount)}` : '';
+  switch (item.action) {
+    case 'create_expense':
+      return `Thêm khoản chi "${p.description ?? ''}"${amount}`;
+    case 'create_payment':
+      return `Gửi thanh toán${amount}`;
+    case 'confirm_payment':
+      return 'Xác nhận thanh toán';
+    case 'reject_payment':
+      return 'Từ chối thanh toán';
+    case 'dispute_payment':
+      return 'Báo sai lệch thanh toán';
+    case 'cancel_payment':
+      return 'Hủy thanh toán';
+    default:
+      return item.action;
   }
+}
 
-  return { synced, failed, skipped };
+/** Nhóm của một mục hàng đợi (nếu có) — để màn nhóm hiện "Chưa đồng bộ" */
+export function queueItemGroupId(item: Pick<QueueItem, 'payload'>): string | null {
+  try {
+    const p = JSON.parse(item.payload);
+    return typeof p.groupId === 'string' ? p.groupId : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,0 +1,15 @@
+# Cấu hình Supabase CLI (supabase start / supabase test db / supabase functions deploy).
+# Các mục không khai báo dùng giá trị mặc định của CLI.
+project_id = "SplitBillApp"
+
+# CFG-04 / NEW-09: send-push được trigger DB (pg_net) gọi với header x-webhook-secret,
+# không có JWT. Hàm tự kiểm tra secret (so sánh thời gian hằng).
+[functions.send-push]
+verify_jwt = false
+
+# Hai hàm còn lại cần JWT của người dùng.
+[functions.settlements]
+verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true

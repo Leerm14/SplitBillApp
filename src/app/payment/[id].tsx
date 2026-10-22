@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,9 +14,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { fetchPayment, confirmPayment, rejectPayment, disputePayment, cancelPayment } from '@/api/payments';
+import { toUserMessage } from '@/api/errors';
+import { fetchPayment } from '@/api/payments';
 import { formatVND } from '@/domain/money';
 import { useAuth } from '@/hooks/use-auth';
+import { submitAction, type QueueAction } from '@/offline';
 
 export default function PaymentDetailScreen() {
   const { id: paymentId } = useLocalSearchParams<{ id: string }>();
@@ -38,22 +41,67 @@ export default function PaymentDetailScreen() {
     queryClient.invalidateQueries({ queryKey: ['groups'] });
   };
 
+  // APP-07: chặn bấm hai lần bằng ref đồng bộ
+  const processingRef = useRef(false);
+
+  /**
+   * APP-08: Xác nhận / từ chối / báo sai lệch / hủy đều đi qua hàng đợi:
+   * ghi hàng đợi trước, gửi ngay; mất mạng thì báo "Chưa đồng bộ" và tự gửi lại.
+   * @returns true nếu đã gửi được hoặc đã vào hàng đợi
+   */
+  const runAction = async (
+    action: Exclude<QueueAction, 'create_expense' | 'create_payment'>,
+    successTitle: string,
+    successMessage: string,
+    fallbackError: string,
+    reason?: string,
+  ): Promise<boolean> => {
+    if (processingRef.current || !user) return false;
+    processingRef.current = true;
+    setProcessing(true);
+    try {
+      // REV-A11: chưa có thanh toán trong cache → đọc lại để payload có groupId
+      // (màn nhóm dựa vào groupId để hiện "Chưa đồng bộ"); mất mạng thì vẫn ghi hàng đợi.
+      let groupId = paymentQ.data?.group_id;
+      if (!groupId) {
+        try {
+          groupId = (await queryClient.fetchQuery({
+            queryKey: ['payment', paymentId],
+            queryFn: () => fetchPayment(paymentId),
+          })).group_id;
+        } catch (e) {
+          console.warn('[Payment] Không lấy được groupId trước khi gửi thao tác:', e);
+        }
+      }
+      const res = await submitAction(
+        action,
+        { paymentId, groupId, reason },
+        Crypto.randomUUID(),
+        user.id,
+      );
+      invalidateAll();
+      if (res.status === 'queued') {
+        Alert.alert('Chưa đồng bộ', 'Thao tác đã được lưu và sẽ tự gửi khi có mạng.');
+      } else {
+        Alert.alert(successTitle, successMessage);
+      }
+      return true;
+    } catch (err: any) {
+      Alert.alert('Lỗi', toUserMessage(err, fallbackError));
+      return false;
+    } finally {
+      processingRef.current = false;
+      setProcessing(false);
+    }
+  };
+
   const handleConfirm = () => {
     Alert.alert('Xác nhận thanh toán', 'Bạn có chắc đã nhận được khoản thanh toán này?', [
       { text: 'Không', style: 'cancel' },
       {
         text: 'Xác nhận',
-        onPress: async () => {
-          setProcessing(true);
-          try {
-            await confirmPayment(paymentId);
-            invalidateAll();
-            Alert.alert('Thành công', 'Đã xác nhận thanh toán');
-          } catch (err: any) {
-            Alert.alert('Lỗi', err.message || 'Không thể xác nhận');
-          } finally {
-            setProcessing(false);
-          }
+        onPress: () => {
+          runAction('confirm_payment', 'Thành công', 'Đã xác nhận thanh toán', 'Không thể xác nhận');
         },
       },
     ]);
@@ -65,17 +113,8 @@ export default function PaymentDetailScreen() {
       {
         text: 'Từ chối',
         style: 'destructive',
-        onPress: async () => {
-          setProcessing(true);
-          try {
-            await rejectPayment(paymentId);
-            invalidateAll();
-            Alert.alert('Đã từ chối', 'Khoản thanh toán đã bị từ chối');
-          } catch (err: any) {
-            Alert.alert('Lỗi', err.message || 'Không thể từ chối');
-          } finally {
-            setProcessing(false);
-          }
+        onPress: () => {
+          runAction('reject_payment', 'Đã từ chối', 'Khoản thanh toán đã bị từ chối', 'Không thể từ chối');
         },
       },
     ]);
@@ -88,17 +127,8 @@ export default function PaymentDetailScreen() {
         text: 'Hủy thanh toán',
         style: 'destructive',
         onPress: async () => {
-          setProcessing(true);
-          try {
-            await cancelPayment(paymentId);
-            invalidateAll();
-            Alert.alert('Đã hủy', 'Yêu cầu thanh toán đã được hủy');
-            router.back();
-          } catch (err: any) {
-            Alert.alert('Lỗi', err.message || 'Không thể hủy');
-          } finally {
-            setProcessing(false);
-          }
+          const ok = await runAction('cancel_payment', 'Đã hủy', 'Yêu cầu thanh toán đã được hủy', 'Không thể hủy');
+          if (ok) router.back();
         },
       },
     ]);
@@ -106,21 +136,19 @@ export default function PaymentDetailScreen() {
 
   const handleDispute = async () => {
     if (!disputeReason.trim()) {
-      Alert.alert('Lỗi', 'Vui lòng nhập lý do tranh chấp');
+      Alert.alert('Lỗi', 'Vui lòng nhập lý do báo sai lệch');
       return;
     }
-
-    setProcessing(true);
-    try {
-      await disputePayment(paymentId, disputeReason.trim());
-      invalidateAll();
+    const ok = await runAction(
+      'dispute_payment',
+      'Đã gửi',
+      'Đã báo sai lệch. Người gửi có thể hủy rồi gửi lại thanh toán đúng.',
+      'Không thể báo sai lệch',
+      disputeReason.trim(),
+    );
+    if (ok) {
       setShowDisputeInput(false);
       setDisputeReason('');
-      Alert.alert('Đã gửi', 'Yêu cầu tranh chấp đã được gửi');
-    } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Không thể gửi tranh chấp');
-    } finally {
-      setProcessing(false);
     }
   };
 
@@ -153,7 +181,7 @@ export default function PaymentDetailScreen() {
     PENDING: { icon: '⏳', label: 'Chờ xác nhận', color: '#FF9500', bg: '#FFF8E1' },
     CONFIRMED: { icon: '✅', label: 'Đã xác nhận', color: '#2E7D32', bg: '#E8F5E9' },
     REJECTED: { icon: '❌', label: 'Đã từ chối', color: '#C62828', bg: '#FFEBEE' },
-    DISPUTED: { icon: '⚠️', label: 'Tranh chấp', color: '#E65100', bg: '#FFF3E0' },
+    DISPUTED: { icon: '⚠️', label: 'Báo sai lệch', color: '#E65100', bg: '#FFF3E0' },
     CANCELLED: { icon: '🚫', label: 'Đã hủy', color: '#666', bg: '#f2f2f7' },
   };
 
@@ -206,7 +234,9 @@ export default function PaymentDetailScreen() {
         {/* Card 4: Lý do tranh chấp */}
         {payment.reason ? (
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Lý do tranh chấp</Text>
+            <Text style={styles.cardLabel}>
+              {payment.status === 'REJECTED' ? 'Lý do từ chối' : 'Lý do báo sai lệch'}
+            </Text>
             <Text style={styles.reasonText}>{payment.reason}</Text>
           </View>
         ) : null}
@@ -266,8 +296,8 @@ export default function PaymentDetailScreen() {
           </View>
         )}
 
-        {/* Actions: PENDING + sender → Hủy */}
-        {payment.status === 'PENDING' && isSender && (
+        {/* NEW-07: Người gửi hủy được khi PENDING hoặc DISPUTED (hủy rồi gửi lại khoản đúng) */}
+        {(payment.status === 'PENDING' || payment.status === 'DISPUTED') && isSender && (
           <Pressable
             style={[styles.cancelBtn, processing && styles.btnDisabled]}
             onPress={handleCancel}
@@ -277,23 +307,23 @@ export default function PaymentDetailScreen() {
           </Pressable>
         )}
 
-        {/* Actions: CONFIRMED + receiver → Tranh chấp */}
-        {payment.status === 'CONFIRMED' && isReceiver && !showDisputeInput && (
+        {/* NEW-07 (BE-11): Người nhận báo sai lệch khi thanh toán còn PENDING */}
+        {payment.status === 'PENDING' && isReceiver && !showDisputeInput && (
           <Pressable
             style={styles.disputeBtn}
             onPress={() => setShowDisputeInput(true)}
           >
-            <Text style={styles.disputeBtnText}>⚠️ Tranh chấp thanh toán này</Text>
+            <Text style={styles.disputeBtnText}>⚠️ Báo sai lệch (số tiền / chưa nhận được)</Text>
           </Pressable>
         )}
 
-        {/* Form tranh chấp */}
-        {showDisputeInput && (
+        {/* Form báo sai lệch */}
+        {showDisputeInput && payment.status === 'PENDING' && isReceiver && (
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Lý do tranh chấp</Text>
+            <Text style={styles.cardLabel}>Lý do báo sai lệch</Text>
             <TextInput
               style={styles.disputeInput}
-              placeholder="Nhập lý do tranh chấp..."
+              placeholder="Nhập lý do báo sai lệch..."
               placeholderTextColor="#999"
               value={disputeReason}
               onChangeText={setDisputeReason}
@@ -309,7 +339,7 @@ export default function PaymentDetailScreen() {
                 {processing ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.submitDisputeBtnText}>Gửi tranh chấp</Text>
+                  <Text style={styles.submitDisputeBtnText}>Gửi báo sai lệch</Text>
                 )}
               </Pressable>
               <Pressable

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,12 +12,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { fetchGroupActivities, fetchRecentActivities } from '@/api/activity';
-import { fetchGroups } from '@/api/groups';
+import { fetchGroupActivities, fetchRecentActivities, type ActivityLog } from '@/api/activity';
+import { toUserMessage } from '@/api/errors';
+import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
+import { useAuth } from '@/hooks/use-auth';
+import { useGroupsList } from '@/hooks/use-groups';
 
-// ============================
-// Action type → Vietnamese label
+
+// ============================
+// REV-S2: action / entity_type thật do RPC ghi vào activity_logs → nhãn tiếng Việt
 // ============================
 const ACTION_LABELS: Record<string, string> = {
   EXPENSE_CREATED: 'đã thêm khoản chi',
@@ -28,11 +32,17 @@ const ACTION_LABELS: Record<string, string> = {
   PAYMENT_REJECTED: 'đã từ chối thanh toán',
   PAYMENT_DISPUTED: 'đã báo sai lệch thanh toán',
   PAYMENT_CANCELLED: 'đã hủy thanh toán',
-  MEMBER_JOINED: 'đã tham gia nhóm',
-  MEMBER_LEFT: 'đã rời nhóm',
-  MEMBER_REMOVED: 'đã xóa thành viên',
-  GROUP_UPDATED: 'đã cập nhật nhóm',
-  INVITE_CREATED: 'đã tạo lời mời',
+  CREATE_GROUP: 'đã tạo nhóm',
+  UPDATE_GROUP: 'đã cập nhật nhóm',
+  TRANSFER_OWNERSHIP_GROUP: 'đã chuyển quyền chủ nhóm',
+  CLOSE_GROUP: 'đã đóng nhóm',
+  ROTATE_INVITE_CODE_GROUP: 'đã đổi mã mời',
+  JOIN_MEMBER: 'đã tham gia nhóm',
+  LEAVE_MEMBER: 'đã rời nhóm',
+  REMOVE_MEMBER: 'đã xóa một thành viên',
+  CREATE_INVITE: 'đã tạo lời mời',
+  ACCEPT_INVITE: 'đã nhận lời mời vào nhóm',
+  REVOKE_INVITE: 'đã thu hồi lời mời',
 };
 
 const ACTION_ICONS: Record<string, string> = {
@@ -44,12 +54,28 @@ const ACTION_ICONS: Record<string, string> = {
   PAYMENT_REJECTED: '❌',
   PAYMENT_DISPUTED: '⚠️',
   PAYMENT_CANCELLED: '🚫',
-  MEMBER_JOINED: '👋',
-  MEMBER_LEFT: '🚪',
-  MEMBER_REMOVED: '🗑️',
-  GROUP_UPDATED: '⚙️',
-  INVITE_CREATED: '🔗',
+  CREATE_GROUP: '👥',
+  UPDATE_GROUP: '⚙️',
+  TRANSFER_OWNERSHIP_GROUP: '👑',
+  CLOSE_GROUP: '🔒',
+  ROTATE_INVITE_CODE_GROUP: '🔄',
+  JOIN_MEMBER: '👋',
+  LEAVE_MEMBER: '🚪',
+  REMOVE_MEMBER: '🗑️',
+  CREATE_INVITE: '🔗',
+  ACCEPT_INVITE: '🤝',
+  REVOKE_INVITE: '⛔',
 };
+
+/**
+ * REV-S2: Khóa tra nhãn. Hành động EXPENSE_* / PAYMENT_* đã tự mang loại; hành động chung
+ * (CREATE, UPDATE, JOIN…) ghép thêm entity_type viết HOA ('GROUP', 'MEMBER', 'INVITE').
+ */
+function activityKey(item: Pick<ActivityLog, 'action' | 'entity_type'>): string {
+  const action = (item.action ?? '').toUpperCase();
+  if (ACTION_LABELS[action]) return action;
+  return `${action}_${(item.entity_type ?? '').toUpperCase()}`;
+}
 
 // ============================
 // Relative time formatting
@@ -92,77 +118,61 @@ export default function HistoryScreen() {
   const filterGroupId = params.groupId;
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(filterGroupId ?? null);
 
-  // Fetch groups for filter chips
-  const groupsQ = useQuery({
-    queryKey: ['groups'],
-    queryFn: fetchGroups,
-  });
+  // Nhóm cho bộ lọc — gồm cả nhóm "Đã lưu trữ" (REV-S5: người đã rời vẫn xem được lịch sử)
+  const groupsQ = useGroupsList();
+  const { user } = useAuth();
 
-  // Fetch activities — group-specific or all
+  // Fetch activities — group-specific or all (REV-A1: chỉ khi đã đăng nhập, key theo người dùng)
   const activitiesQ = useQuery({
-    queryKey: ['activities', selectedGroupId ?? 'all'],
+    queryKey: ['activities', user?.id ?? null, selectedGroupId ?? 'all'],
     queryFn: () =>
       selectedGroupId
         ? fetchGroupActivities(selectedGroupId)
         : fetchRecentActivities(),
+    enabled: !!user,
   });
 
   // Filter data if needed (already handled by query)
   const activities = activitiesQ.data ?? [];
 
-  const handleTapActivity = (item: any) => {
-    if (!item.entity_type || !item.entity_id) return;
+  // REV-S2: điều hướng theo entity_type viết HOA của activity_logs
+  const handleTapActivity = (item: ActivityLog) => {
     const groupId = item.group_id;
-    switch (item.entity_type) {
-      case 'expense':
-        router.push(`/group/${groupId}/expense/${item.entity_id}` as any);
-        break;
-      case 'payment':
-        // Navigate to group payments tab
-        router.push(`/group/${groupId}` as any);
-        break;
-      case 'group':
-        router.push(`/group/${groupId}` as any);
-        break;
-      case 'member':
-        router.push(`/group/${groupId}/members` as any);
-        break;
-      default:
-        router.push(`/group/${groupId}` as any);
-        break;
+    const entityType = (item.entity_type ?? '').toUpperCase();
+    if (entityType === 'EXPENSE' && item.entity_id) {
+      router.push(`/group/${groupId}/expense/${item.entity_id}` as any);
+    } else if (entityType === 'PAYMENT' && item.entity_id) {
+      router.push(`/payment/${item.entity_id}` as any);
+    } else {
+      router.push(`/group/${groupId}` as any);
     }
   };
 
-  const getActorName = (item: any): string => {
-    if (item.actor && typeof item.actor === 'object') {
-      return (item.actor as any).display_name || 'Ai đó';
-    }
-    return 'Ai đó';
-  };
+  const getActorName = (item: ActivityLog): string => item.actor?.display_name || 'Ai đó';
 
-  const getGroupName = (item: any): string => {
-    if (item.group && typeof item.group === 'object') {
-      return (item.group as any).name || '';
-    }
+  const getGroupName = (item: ActivityLog): string => {
+    if (item.group?.name) return item.group.name;
     // Fallback: find from groupsQ
     if (groupsQ.data) {
-      const g = groupsQ.data.find((g: any) => g.id === item.group_id);
+      const g = groupsQ.data.find((grp) => grp.id === item.group_id);
       if (g) return g.name;
     }
     return '';
   };
 
-  const getAmount = (item: any): number | null => {
-    if (item.metadata && typeof item.metadata === 'object' && item.metadata.amount) {
-      return Number(item.metadata.amount);
-    }
-    return null;
+  // REV-S2: số tiền nằm trong after.amount (bigint có thể là chuỗi)
+  const getAmount = (item: ActivityLog): number | null => {
+    const raw = item.after?.amount;
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
   };
 
-  const renderItem = ({ item }: { item: any }) => {
+  const renderItem = ({ item }: { item: ActivityLog }) => {
     const actorName = getActorName(item);
-    const actionLabel = ACTION_LABELS[item.action] || item.action;
-    const icon = ACTION_ICONS[item.action] || '📝';
+    const key = activityKey(item);
+    const actionLabel = ACTION_LABELS[key] || item.action;
+    const icon = ACTION_ICONS[key] || '📝';
     const groupName = getGroupName(item);
     const amount = getAmount(item);
     const timeStr = formatRelativeTime(item.created_at);
@@ -201,6 +211,19 @@ export default function HistoryScreen() {
     );
   }
 
+  // APP-19: lỗi tải lịch sử — không hiện như "Chưa có hoạt động nào"
+  if (activitiesQ.error) {
+    return (
+      <SafeAreaView style={styles.container} edges={['bottom']}>
+        <ErrorState
+          title="Không thể tải lịch sử"
+          message={toUserMessage(activitiesQ.error, 'Đã xảy ra lỗi')}
+          onRetry={() => activitiesQ.refetch()}
+        />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <FlatList
@@ -228,7 +251,7 @@ export default function HistoryScreen() {
                     Tất cả
                   </Text>
                 </Pressable>
-                {groupsQ.data.map((g: any) => (
+                {groupsQ.data.map((g) => (
                   <Pressable
                     key={g.id}
                     style={[styles.filterChip, selectedGroupId === g.id && styles.filterChipActive]}

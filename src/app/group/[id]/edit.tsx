@@ -14,7 +14,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { fetchGroup, updateGroup } from '@/api/groups';
+import { isSimplifyEnabled } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function EditGroupScreen() {
@@ -35,7 +37,8 @@ export default function EditGroupScreen() {
 
   const name = localName ?? groupQ.data?.name ?? '';
   const description = localDescription ?? groupQ.data?.description ?? '';
-  const simplifyDebts = localSimplifyDebts ?? groupQ.data?.simplify_debts ?? false;
+  // APP-06: simplify_debts NULL được hiểu là bật (BR-09), thống nhất với màn công nợ
+  const simplifyDebts = localSimplifyDebts ?? isSimplifyEnabled(groupQ.data?.simplify_debts);
 
   const setName = setLocalName;
   const setDescription = setLocalDescription;
@@ -46,15 +49,22 @@ export default function EditGroupScreen() {
     if (groupQ.data && user && groupQ.data.owner_id !== user.id) {
       router.back();
     }
-  }, [groupQ.data, user]);
+  }, [groupQ.data, user, router]);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      updateGroup(id, {
-        name: name.trim(),
-        description: description.trim(),
-        simplify_debts: simplifyDebts,
-      }),
+    // Hợp đồng update_group: NULL = giữ nguyên → chỉ gửi trường đã đổi
+    mutationFn: () => {
+      const updates: { name?: string; description?: string; simplify_debts?: boolean } = {};
+      if (localName !== null && name.trim() !== (groupQ.data?.name ?? '')) updates.name = name.trim();
+      if (localDescription !== null && description.trim() !== (groupQ.data?.description ?? '')) {
+        updates.description = description.trim();
+      }
+      if (localSimplifyDebts !== null && localSimplifyDebts !== isSimplifyEnabled(groupQ.data?.simplify_debts)) {
+        updates.simplify_debts = localSimplifyDebts;
+      }
+      if (Object.keys(updates).length === 0) return Promise.resolve(null);
+      return updateGroup(id, updates);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['group', id] });
       queryClient.invalidateQueries({ queryKey: ['groups'] });
@@ -62,7 +72,7 @@ export default function EditGroupScreen() {
       router.back();
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể cập nhật nhóm');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể cập nhật nhóm'));
     },
   });
 

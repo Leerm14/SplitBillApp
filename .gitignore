@@ -45,3 +45,5 @@ example
 # Supabase credentials
 .env
 .md
+# Supabase CLI (project-ref, pooler URL của project đã link)
+supabase/.temp/

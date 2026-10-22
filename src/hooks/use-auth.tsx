@@ -1,8 +1,19 @@
-import { supabase } from '@/lib/supabase';
+import type { Session, User } from '@supabase/supabase-js';
+import { useQueryClient } from '@tanstack/react-query';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+
+import {
+  getSession,
+  onAuthStateChange,
+  resetPasswordForEmail,
+  signInWithEmail,
+  signOutSession,
+  signUpWithEmail,
+  updatePassword,
+} from '@/api/auth';
+import { unregisterCurrentPushToken } from '@/api/notifications';
 import { clearPersistedCache } from '@/lib/query-persister';
 import { clearQueue } from '@/offline/queue';
-import type { Session, User } from '@supabase/supabase-js';
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 type AuthContextType = {
   session: Session | null;
@@ -19,20 +30,44 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const loadingRef = useRef(true);
+  // REV-A1: tài khoản của phiên gần nhất trong tiến trình này (null sau khi đăng xuất)
+  const lastUserIdRef = useRef<string | null>(null);
 
-  const finishLoading = (s: Session | null) => {
-    if (loadingRef.current) {
-      loadingRef.current = false;
-      setSession(s);
-      setLoading(false);
+  /**
+   * APP-02: Xóa mọi dữ liệu cục bộ của tài khoản vừa đăng xuất: cache TanStack Query trong bộ nhớ,
+   * cache đã lưu (AsyncStorage) và hàng đợi offline. Gọi được nhiều lần.
+   */
+  const clearLocalData = useCallback(async () => {
+    queryClient.clear();
+    await clearPersistedCache();
+    try {
+      await clearQueue();
+    } catch (e) {
+      console.warn('[Auth] Không xóa được hàng đợi offline:', e);
     }
-  };
+  }, [queryClient]);
+
+  // Giữ bản mới nhất cho listener đăng ký một lần
+  const clearLocalDataRef = useRef(clearLocalData);
+  useEffect(() => {
+    clearLocalDataRef.current = clearLocalData;
+  }, [clearLocalData]);
 
   useEffect(() => {
     let mounted = true;
+
+    const finishLoading = (s: Session | null) => {
+      if (loadingRef.current) {
+        loadingRef.current = false;
+        if (lastUserIdRef.current === null) lastUserIdRef.current = s?.user?.id ?? null;
+        setSession(s);
+        setLoading(false);
+      }
+    };
 
     // Timeout: nếu getSession() treo quá 5s → bỏ qua, cho vào sign-in
     const timeout = setTimeout(() => {
@@ -43,13 +78,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, 5000);
 
     // Lấy session hiện tại
-    supabase.auth
-      .getSession()
-      .then(({ data: { session: s } }) => {
-        if (mounted) {
-          console.log('[Auth] getSession OK, session:', s ? 'exists' : 'null');
-          finishLoading(s);
-        }
+    getSession()
+      .then((s) => {
+        if (mounted) finishLoading(s);
       })
       .catch((err) => {
         console.warn('[Auth] getSession error:', err);
@@ -57,61 +88,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
     // Lắng nghe thay đổi auth
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
-      console.log('[Auth] onAuthStateChange:', _event);
-      if (mounted) {
-        setSession(s);
-        // Nếu vẫn đang loading (getSession chưa trả về), hoàn thành luôn
-        if (loadingRef.current) {
-          finishLoading(s);
-        }
+    const unsubscribe = onAuthStateChange((event, s) => {
+      if (!mounted) return;
+      // REV-A1: đăng nhập (hoặc đổi sang tài khoản khác) → bỏ mọi cache của phiên trước / lúc ẩn danh
+      // (ví dụ [] của ['groups'] tải bằng anon key sau khi đăng xuất) TRƯỚC khi màn hình đọc cache.
+      // INITIAL_SESSION của cùng tài khoản thì giữ cache đã lưu để xem offline.
+      const nextUserId = s?.user?.id ?? null;
+      if (event === 'INITIAL_SESSION') {
+        lastUserIdRef.current = nextUserId;
+      } else if (nextUserId && nextUserId !== lastUserIdRef.current) {
+        queryClient.clear();
+        lastUserIdRef.current = nextUserId;
+      } else if (!nextUserId && event === 'SIGNED_OUT') {
+        lastUserIdRef.current = null;
+      }
+      setSession(s);
+      // Nếu vẫn đang loading (getSession chưa trả về), hoàn thành luôn
+      if (loadingRef.current) finishLoading(s);
+      // APP-02: Phiên bị thu hồi ở nơi khác (đăng xuất mọi thiết bị, token hết hạn) cũng phải xóa dữ liệu
+      if (event === 'SIGNED_OUT') {
+        clearLocalDataRef.current().catch((e) => console.warn('[Auth] clearLocalData error:', e));
       }
     });
 
     return () => {
       mounted = false;
       clearTimeout(timeout);
-      subscription.unsubscribe();
+      unsubscribe();
     };
-  }, []);
+  }, [queryClient]);
 
   const signUp = async (email: string, password: string, displayName: string) => {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { display_name: displayName } },
-    });
-    if (error) throw error;
+    await signUpWithEmail(email, password, displayName);
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    await signInWithEmail(email, password);
   };
 
-  const signOut = async () => {
-    // APP-02: Clear persisted cache and offline queue on sign out
-    await clearPersistedCache();
-    await clearQueue();
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+  /**
+   * APP-02: Gỡ push token (cần phiên còn hiệu lực) → đăng xuất → xóa cache, cache đã lưu, hàng đợi.
+   * Nếu đăng xuất lỗi (mất mạng) thì phiên vẫn còn, không xóa dữ liệu.
+   */
+  const signOutWithScope = async (scope: 'local' | 'global') => {
+    await unregisterCurrentPushToken();
+    await signOutSession(scope);
+    await clearLocalData();
   };
+
+  const signOut = () => signOutWithScope('local');
+
+  const signOutAll = () => signOutWithScope('global');
 
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) throw error;
-  };
-
-  const signOutAll = async () => {
-    const { error } = await supabase.auth.signOut({ scope: 'global' });
-    if (error) throw error;
+    await resetPasswordForEmail(email);
   };
 
   const changePassword = async (newPassword: string) => {
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) throw error;
+    await updatePassword(newPassword);
   };
 
   return (

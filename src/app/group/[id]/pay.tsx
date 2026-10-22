@@ -1,7 +1,7 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,101 +15,81 @@ import {
   View,
 } from 'react-native';
 
-import { fetchExpenses } from '@/api/expenses';
-import { fetchGroup, fetchGroupMembers } from '@/api/groups';
-import { fetchPayments, createPayment } from '@/api/payments';
-import { enqueue } from '@/offline';
+import { toUserMessage } from '@/api/errors';
+import { isActiveMember } from '@/api/groups';
+import { ErrorState } from '@/components/error-state';
 import { formatVND, parseVND } from '@/domain/money';
-import {
-  computeBalances,
-  simplifyDebts,
-  type ExpenseInput,
-  type PaymentInput,
-} from '@/domain/settlement';
-import { pairwiseDebts } from '@/domain/pairwise';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupSettlement } from '@/hooks/use-group-settlement';
+import { submitAction } from '@/offline';
 
 export default function PayScreen() {
-  const { id: groupId } = useLocalSearchParams<{ id: string }>();
+  // `to` (tùy chọn): mở từ màn chi tiết công nợ với người nhận chọn sẵn
+  const { id: groupId, to: toParam } = useLocalSearchParams<{ id: string; to?: string }>();
   const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const [toId, setToId] = useState('');
-  const [amountText, setAmountText] = useState('');
+  // APP-14: không setState trong effect — null nghĩa là "người dùng chưa chọn/nhập", lấy theo gợi ý
+  const [toIdInput, setToId] = useState<string | null>(null);
+  const [amountInput, setAmountText] = useState<string | null>(null);
+  // REV-S8: người dùng đã tự gõ số tiền → không tự điền lại khi đổi người nhận
+  const [amountEdited, setAmountEdited] = useState(false);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  // APP-07: Generate idempotency key per form lifecycle, not per submit
+  // APP-07: idempotency key giữ theo form, chỉ đổi khi đã lưu (gửi được hoặc đã vào hàng đợi)
   const idempotencyKeyRef = useRef(Crypto.randomUUID());
+  // APP-07: chặn bấm hai lần bằng ref đồng bộ (state cập nhật trễ một nhịp render)
+  const submittingRef = useRef(false);
 
-  const membersQ = useQuery({
-    queryKey: ['group-members', groupId],
-    queryFn: () => fetchGroupMembers(groupId),
-  });
+  // APP-06: gợi ý theo công tắc simplify_debts của nhóm (dùng chung suggestTransfers)
+  const {
+    membersQ,
+    getName,
+    settlement,
+    settlementError,
+    isViewerActive,
+    isGroupClosed,
+    canWrite,
+    isLoading,
+    queryError,
+    refetchAll,
+  } = useGroupSettlement(groupId);
 
-  const expensesQ = useQuery({
-    queryKey: ['expenses', groupId],
-    queryFn: () => fetchExpenses(groupId),
-  });
+  // Các gợi ý mà mình là người trả (có thể nhiều người nhận khi tắt bù trừ)
+  const mySuggestions = (settlement?.suggestions ?? []).filter((t) => t.from === user?.id);
 
-  const paymentsQ = useQuery({
-    queryKey: ['payments', groupId],
-    queryFn: () => fetchPayments(groupId),
-  });
+  // REV-S8: người nhận / số tiền mặc định chốt lại ở lần render đầu có dữ liệu — lần tải lại sau
+  // (gợi ý đổi vì người khác vừa ghi) không âm thầm đổi số đang hiện trên form.
+  const [frozenDefaults, setFrozenDefaults] = useState<{ toId: string; amountText: string } | null>(null);
+  if (frozenDefaults === null && (settlement || settlementError)) {
+    const defaultTo = toParam ?? mySuggestions[0]?.to ?? '';
+    const defaultSuggestion = mySuggestions.find((t) => t.to === defaultTo);
+    setFrozenDefaults({ toId: defaultTo, amountText: defaultSuggestion ? String(defaultSuggestion.amount) : '' });
+  }
 
-  // APP-06: Fetch group to check simplify_debts setting
-  const groupQ = useQuery({
-    queryKey: ['group', groupId],
-    queryFn: () => fetchGroup(groupId),
-  });
+  const toId = toIdInput ?? frozenDefaults?.toId ?? toParam ?? '';
+  // APP-17: gợi ý cho đúng người nhận đang chọn
+  const suggestionForRecipient = mySuggestions.find((t) => t.to === toId) ?? null;
+  const amountText = amountInput ?? frozenDefaults?.amountText ?? '';
 
-  // Tính gợi ý cho user hiện tại
-  const mySuggestion = useMemo(() => {
-    if (!membersQ.data || !expensesQ.data || !paymentsQ.data || !user) return null;
-
-    const memberIds = membersQ.data.map((m: any) => m.id);
-    const expenses: ExpenseInput[] = expensesQ.data.map((e: any) => ({
-      paidBy: e.paid_by,
-      status: e.status,
-      shares: e.expense_shares.map((s: any) => ({
-        userId: s.user_id,
-        amount: Number(s.amount),
-      })),
-    }));
-    const payments: PaymentInput[] = paymentsQ.data.map((p: any) => ({
-      fromId: p.from_id,
-      toId: p.to_id,
-      amount: Number(p.amount),
-      status: p.status,
-    }));
-
-    try {
-      const projectedBal = computeBalances(memberIds, expenses, payments, { includePending: true });
-      // APP-06: Respect group setting for simplify_debts
-      if (groupQ.data?.simplify_debts === false) {
-        const pairDebts = pairwiseDebts(memberIds, expenses, payments, { includePending: true });
-        return pairDebts.find((s) => s.from === user.id) || null;
-      }
-      const suggestions = simplifyDebts(projectedBal);
-      return suggestions.find((s) => s.from === user.id) || null;
-    } catch {
-      return null;
+  /** REV-S8: đổi người nhận do người dùng chọn — điền số gợi ý của người đó nếu chưa tự nhập số */
+  const selectRecipient = (id: string, suggestedAmount?: number) => {
+    setToId(id);
+    if (suggestedAmount !== undefined) {
+      setAmountText(String(suggestedAmount));
+    } else if (!amountEdited) {
+      const s = mySuggestions.find((t) => t.to === id);
+      setAmountText(s ? String(s.amount) : '');
     }
-  }, [membersQ.data, expensesQ.data, paymentsQ.data, user, groupQ.data]);
-
-  // APP-14: Pre-fill từ gợi ý (useEffect thay vì useMemo để tránh setState trong render)
-  useEffect(() => {
-    if (mySuggestion && !toId && !amountText) {
-      setToId(mySuggestion.to);
-      setAmountText(String(mySuggestion.amount));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- chỉ chạy khi mySuggestion thay đổi
-  }, [mySuggestion]);
+  };
 
   const amount = parseVND(amountText);
   const isAmountValid = amount !== null && amount > 0;
 
   const handleSubmit = async () => {
+    if (submittingRef.current) return;
+    if (!user) return;
     if (!toId) {
       Alert.alert('Lỗi', 'Vui lòng chọn người nhận');
       return;
@@ -119,48 +99,38 @@ export default function PayScreen() {
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
-    // APP-07: Use ref-based idempotency key (generated per form lifecycle)
     const currentKey = idempotencyKeyRef.current;
     try {
-      await createPayment({
-        group_id: groupId,
-        to_id: toId,
-        amount: amount!,
-        note: note.trim() || undefined,
-        idempotency_key: currentKey,
-      });
-      // APP-07: Reset key after successful submit
+      // APP-08: ghi hàng đợi trước (kèm key), rồi gửi ngay
+      const res = await submitAction(
+        'create_payment',
+        { groupId, toId, amount: amount!, note: note.trim() || undefined, idempotencyKey: currentKey },
+        currentKey,
+        user.id,
+      );
+      // APP-07: Reset key sau khi đã lưu
       idempotencyKeyRef.current = Crypto.randomUUID();
       queryClient.invalidateQueries({ queryKey: ['payments', groupId] });
-      queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
       queryClient.invalidateQueries({ queryKey: ['groups'] });
-      Alert.alert('Thành công', 'Đã gửi yêu cầu thanh toán. Chờ người nhận xác nhận.');
+      if (res.status === 'queued') {
+        Alert.alert('Chưa đồng bộ', 'Chưa gửi được do mất kết nối. Thanh toán đã được lưu và sẽ tự gửi khi có mạng.');
+      } else {
+        Alert.alert('Thành công', 'Đã gửi yêu cầu thanh toán. Chờ người nhận xác nhận.');
+      }
       router.back();
     } catch (err: any) {
-      // Lỗi mạng → lưu vào hàng đợi offline
-      const msg = String(err.message || '').toLowerCase();
-      if (msg.includes('network') || msg.includes('fetch') || msg.includes('failed to fetch')) {
-        try {
-          await enqueue('create_payment', {
-            groupId, toId, amount, note: note.trim() || undefined, idempotencyKey: currentKey,
-          }, currentKey);
-          Alert.alert('Đã lưu', 'Thanh toán sẽ được gửi khi có mạng.');
-          router.back();
-          return;
-        } catch { /* bỏ qua lỗi enqueue */ }
-      }
-      Alert.alert('Lỗi', err.message || 'Không thể gửi thanh toán');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể gửi thanh toán'));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
   const members = membersQ.data || [];
-  const otherMembers = members.filter((m: any) => m.id !== user?.id);
-  const getName = (id: string) => members.find((m: any) => m.id === id)?.displayName || id.slice(0, 8);
-
-  const isLoading = membersQ.isLoading || expensesQ.isLoading || paymentsQ.isLoading;
+  // NEW-03: Chỉ trả được cho thành viên ACTIVE (RPC create_payment cũng kiểm tra)
+  const otherMembers = members.filter((m) => isActiveMember(m) && m.id !== user?.id);
 
   if (isLoading) {
     return (
@@ -171,16 +141,44 @@ export default function PayScreen() {
   }
 
   // APP-19: Hiển thị lỗi thay vì dữ liệu trống
-  const queryError = membersQ.error || expensesQ.error || paymentsQ.error;
   if (queryError) {
+    return <ErrorState message={toUserMessage(queryError, 'Không thể tải dữ liệu')} onRetry={refetchAll} />;
+  }
+
+  // REV-S5: đã rời nhóm / nhóm đã đóng → không cho gửi thanh toán
+  if (!canWrite) {
     return (
-      <View style={styles.center}>
-        <Text style={{ fontSize: 16, color: '#FF3B30', textAlign: 'center' }}>
-          ⚠️ {(queryError as Error).message || 'Không thể tải dữ liệu'}
+      <ErrorState
+        title={!isViewerActive ? 'Bạn đã rời nhóm' : isGroupClosed ? 'Nhóm đã đóng' : 'Không thể gửi thanh toán'}
+        message="Bạn chỉ xem được dữ liệu của nhóm này, không thể gửi thanh toán mới."
+      />
+    );
+  }
+
+  /** APP-17 (BR-07): cảnh báo theo người nhận đang chọn */
+  const renderOverpayWarning = () => {
+    if (!isAmountValid || !toId || settlementError) return null;
+    if (suggestionForRecipient) {
+      if (amount! <= suggestionForRecipient.amount) return null;
+      return (
+        <View style={styles.warningBanner}>
+          <Text style={styles.warningText}>
+            ⚠️ Số tiền vượt mức gợi ý cho {getName(toId)} ({formatVND(suggestionForRecipient.amount)}). Bạn có chắc chắn?
+          </Text>
+        </View>
+      );
+    }
+    const otherHint = mySuggestions.length > 0
+      ? `, nhưng gợi ý đang là chuyển ${mySuggestions.map((t) => `${getName(t.to)} ${formatVND(t.amount)}`).join(', ')}.`
+      : '.';
+    return (
+      <View style={styles.warningBanner}>
+        <Text style={styles.warningText}>
+          ⚠️ Theo gợi ý hiện tại, bạn không cần chuyển cho {getName(toId)}. Bạn vẫn có thể gửi — số dư sẽ tự cân lại{otherHint}
         </Text>
       </View>
     );
-  }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -188,24 +186,37 @@ export default function PayScreen() {
       style={styles.flex}
     >
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        {/* APP-01: không tính được gợi ý (BR-02) — báo lỗi, vẫn cho gửi thanh toán */}
+        {settlementError && (
+          <ErrorState
+            inline
+            title="Không tính được gợi ý tất toán"
+            message="Số liệu của nhóm không khớp. Lỗi đã được ghi lại."
+          />
+        )}
+
         {/* Gợi ý */}
-        {mySuggestion && (
+        {mySuggestions.length > 0 && (
           <View style={styles.suggestion}>
             <Text style={styles.suggestionLabel}>💡 Gợi ý tất toán</Text>
-            <Text style={styles.suggestionText}>
-              Chuyển {getName(mySuggestion.to)} {formatVND(mySuggestion.amount)}
-            </Text>
+            {mySuggestions.map((t) => (
+              <Pressable key={t.to} onPress={() => selectRecipient(t.to, t.amount)}>
+                <Text style={styles.suggestionText}>
+                  Chuyển {getName(t.to)} {formatVND(t.amount)}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         )}
 
         {/* Người nhận */}
         <Text style={styles.label}>Người nhận</Text>
         <View style={styles.memberList}>
-          {otherMembers.map((m: any) => (
+          {otherMembers.map((m) => (
             <Pressable
               key={m.id}
               style={[styles.memberChip, toId === m.id && styles.memberChipActive]}
-              onPress={() => setToId(m.id)}
+              onPress={() => selectRecipient(m.id)}
             >
               <Text style={[styles.memberChipText, toId === m.id && styles.memberChipTextActive]}>
                 {m.displayName || m.id.slice(0, 8)}
@@ -221,29 +232,18 @@ export default function PayScreen() {
           placeholder="0"
           placeholderTextColor="#999"
           value={amountText}
-          onChangeText={setAmountText}
+          onChangeText={(t) => {
+            setAmountEdited(true);
+            setAmountText(t);
+          }}
           keyboardType="numeric"
         />
         {isAmountValid && (
-          <Text style={styles.amountPreview}>{formatVND(amount)}</Text>
+          <Text style={styles.amountPreview}>{formatVND(amount!)}</Text>
         )}
 
-        {/* APP-17: Cảnh báo vượt mức gợi ý (BR-07) — so sánh với gợi ý cụ thể cho người nhận đã chọn */}
-        {isAmountValid && (() => {
-          // Tìm gợi ý cho chính recipient đã chọn (toId)
-          if (!toId || !mySuggestion) return null;
-          // Nếu gợi ý là cho chính người nhận đã chọn → hiển thị cảnh báo khi vượt mức
-          if (mySuggestion.to === toId && amount > mySuggestion.amount) {
-            return (
-              <View style={styles.warningBanner}>
-                <Text style={styles.warningText}>
-                  ⚠️ Số tiền vượt mức gợi ý {formatVND(mySuggestion.amount)}. Bạn có chắc chắn?
-                </Text>
-              </View>
-            );
-          }
-          return null;
-        })()}
+        {/* APP-17: Cảnh báo vượt mức gợi ý (BR-07) theo đúng người nhận đang chọn */}
+        {renderOverpayWarning()}
 
         {/* Ghi chú */}
         <Text style={styles.label}>Ghi chú (tùy chọn)</Text>

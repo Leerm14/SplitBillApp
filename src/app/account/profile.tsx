@@ -17,6 +17,7 @@ import {
   updateProfile,
   getAvatarUrl,
 } from '@/api/profiles';
+import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function ProfileScreen() {
@@ -45,7 +46,7 @@ export default function ProfileScreen() {
       Alert.alert('Thành công', 'Đã cập nhật hồ sơ');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+      Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
     },
   });
 

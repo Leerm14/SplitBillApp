@@ -11,10 +11,12 @@ import {
   View,
 } from 'react-native';
 
+import { toUserMessage } from '@/api/errors';
 import { cancelExpense, fetchExpense } from '@/api/expenses';
-import { fetchGroup } from '@/api/groups';
+import { isActiveMember } from '@/api/groups';
 import { formatVND } from '@/domain/money';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupAccess } from '@/hooks/use-group-settlement';
 
 export default function ExpenseDetailScreen() {
   const { id: groupId, expenseId } = useLocalSearchParams<{ id: string; expenseId: string }>();
@@ -27,10 +29,8 @@ export default function ExpenseDetailScreen() {
     queryFn: () => fetchExpense(expenseId),
   });
 
-  const groupQ = useQuery({
-    queryKey: ['group', groupId],
-    queryFn: () => fetchGroup(groupId),
-  });
+  // REV-S5 / REV-S10: quyền ghi của mình + trạng thái thành viên của người tham gia khoản chi
+  const { groupQ, membersQ, canWrite, isViewerActive } = useGroupAccess(groupId);
 
   const handleCancel = () => {
     Alert.alert('Hủy khoản chi', 'Bạn có chắc muốn hủy khoản chi này?', [
@@ -46,7 +46,7 @@ export default function ExpenseDetailScreen() {
             queryClient.invalidateQueries({ queryKey: ['groups'] });
             router.back();
           } catch (err: any) {
-            Alert.alert('Lỗi', err.message || 'Không thể hủy khoản chi');
+            Alert.alert('Lỗi', toUserMessage(err, 'Không thể hủy khoản chi'));
           }
         },
       },
@@ -75,6 +75,19 @@ export default function ExpenseDetailScreen() {
   const expense = expenseQ.data;
   const isActive = expense.status === 'ACTIVE';
   const canManage = expense.created_by === user?.id || groupQ.data?.owner_id === user?.id;
+  // REV-S10: có người trả / người chịu không còn ACTIVE → server từ chối (PARTICIPANT_NOT_ACTIVE)
+  const members = membersQ.data ?? [];
+  const inactiveParticipants = members.length
+    ? [expense.paid_by, ...(expense.expense_shares || []).map((s) => s.user_id)]
+        .filter((uid, i, arr) => arr.indexOf(uid) === i)
+        .filter((uid) => {
+          const m = members.find((x) => x.id === uid);
+          return !m || !isActiveMember(m);
+        })
+    : [];
+  const nameOf = (uid: string) =>
+    uid === user?.id ? 'Bạn' : members.find((m) => m.id === uid)?.displayName || uid.slice(0, 8);
+  const canEdit = isActive && canWrite && inactiveParticipants.length === 0;
 
   const splitMethodLabel = (method: string) => {
     switch (method) {
@@ -134,9 +147,7 @@ export default function ExpenseDetailScreen() {
           const percentBp = s.percent_bp ? Number(s.percent_bp) : null;
           return (
             <View key={s.user_id} style={styles.shareRow}>
-              <Text style={styles.shareName}>
-                {s.user_id === user?.id ? 'Bạn' : s.user_id.slice(0, 8)}
-              </Text>
+              <Text style={styles.shareName}>{nameOf(s.user_id)}</Text>
               <View style={styles.shareRight}>
                 {percentBp !== null && percentBp > 0 && (
                   <Text style={styles.sharePercent}>{(percentBp / 100).toFixed(1)}%</Text>
@@ -190,8 +201,21 @@ export default function ExpenseDetailScreen() {
         </View>
       </View>
 
+      {/* REV-S5 / REV-S10: giải thích vì sao không sửa / hủy được */}
+      {isActive && !canEdit && (
+        <View style={styles.lockedInfo}>
+          <Text style={styles.lockedInfoText}>
+            {!isViewerActive
+              ? 'Bạn đã rời nhóm nên không thể sửa hoặc hủy khoản chi.'
+              : !canWrite
+                ? 'Nhóm đã đóng nên không thể sửa hoặc hủy khoản chi.'
+                : `Không thể sửa hoặc hủy: ${inactiveParticipants.map(nameOf).join(', ')} đã rời nhóm.`}
+          </Text>
+        </View>
+      )}
+
       {/* Bottom actions */}
-      {isActive && (
+      {canEdit && (
         <View style={styles.actions}>
           <Pressable
             style={styles.editBtn}
@@ -319,6 +343,15 @@ const styles = StyleSheet.create({
     borderColor: '#FF3B30',
   },
   cancelBtnText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
+
+  lockedInfo: {
+    backgroundColor: '#F2F2F7',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#D1D1D6',
+  },
+  lockedInfoText: { fontSize: 14, color: '#666' },
 
   cancelledInfo: {
     backgroundColor: '#FFEBEE',

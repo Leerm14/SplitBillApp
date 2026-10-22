@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { resetPasswordForEmail } from '@/api/auth';
 
 export default function ForgotPasswordScreen() {
@@ -32,7 +33,7 @@ export default function ForgotPasswordScreen() {
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+      Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
     } finally {
       setLoading(false);
     }

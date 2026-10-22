@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
+import * as Linking from 'expo-linking';
 import React from 'react';
 import {
   ActivityIndicator,
@@ -13,7 +14,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { createInvite, fetchGroup, fetchInvites, revokeInvite } from '@/api/groups';
+
+// APP-11: Tạo liên kết theo đúng scheme trong app.json ("splitbill"), không viết cứng
+function inviteLink(token: string): string {
+  return Linking.createURL(`/join/${token}`);
+}
 
 export default function InviteScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -35,11 +42,11 @@ export default function InviteScreen() {
       queryClient.invalidateQueries({ queryKey: ['group-invites', id] });
       const token = typeof data === 'string' ? data : data?.token;
       if (token) {
-        Alert.alert('Liên kết mời', `splitbillapp://join/${token}`);
+        Alert.alert('Liên kết mời', inviteLink(token));
       }
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể tạo liên kết mời');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tạo liên kết mời'));
     },
   });
 
@@ -50,7 +57,7 @@ export default function InviteScreen() {
       Alert.alert('Thành công', 'Đã thu hồi lời mời');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể thu hồi lời mời');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể thu hồi lời mời'));
     },
   });
 
@@ -66,7 +73,7 @@ export default function InviteScreen() {
   const handleShareInviteLink = async (token: string) => {
     try {
       await Share.share({
-        message: `Tham gia nhóm "${groupQ.data?.name}" trên Split Bill!\nsplitbillapp://join/${token}`,
+        message: `Tham gia nhóm "${groupQ.data?.name}" trên Split Bill!\n${inviteLink(token)}`,
       });
     } catch {}
   };
@@ -125,11 +132,11 @@ export default function InviteScreen() {
           ) : (invitesQ.data || []).length === 0 ? (
             <Text style={styles.emptyText}>Chưa có lời mời nào</Text>
           ) : (
-            (invitesQ.data || []).map((invite: any) => (
+            (invitesQ.data || []).map((invite) => (
               <View key={invite.id} style={styles.inviteRow}>
                 <View style={styles.inviteInfo}>
                   <Text style={styles.inviteToken} numberOfLines={1}>
-                    splitbillapp://join/{invite.token}
+                    {inviteLink(invite.token)}
                   </Text>
                   <Text style={styles.inviteMeta}>
                     Hết hạn: {new Date(invite.expires_at).toLocaleDateString('vi-VN', {
@@ -139,7 +146,7 @@ export default function InviteScreen() {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
-                    {' · '}Đã dùng: {invite.uses_count ?? 0}/{invite.max_uses ?? 1}
+                    {' · '}Đã dùng: {invite.used_count ?? 0}/{invite.max_uses ?? 1}
                   </Text>
                 </View>
                 <View style={styles.inviteActions}>

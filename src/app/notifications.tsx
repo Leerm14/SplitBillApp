@@ -11,11 +11,14 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+
+import { useAuth } from '@/hooks/use-auth';
 import {
   fetchNotifications,
   markAsRead,
   markAllAsRead,
   fetchUnreadCount,
+  type NotificationItem,
 } from '@/api/notifications';
 
 // ============================
@@ -77,18 +80,6 @@ function getRelativeTime(dateStr: string): string {
   return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
 }
 
-type NotificationItem = {
-  id: string;
-  user_id: string;
-  type: string;
-  group_id: string | null;
-  expense_id: string | null;
-  payment_id: string | null;
-  read_at: string | null;
-  created_at: string;
-  group: { id: string; name: string } | null;
-};
-
 // ============================
 // Main component
 // ============================
@@ -96,14 +87,19 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  // REV-A1: chỉ tải khi đã đăng nhập (không cache kết quả ẩn danh)
+  const { user } = useAuth();
+
   const { data: notifications, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => fetchNotifications(),
+    enabled: !!user,
   });
 
   const { data: unreadCount } = useQuery({
     queryKey: ['unread-count'],
     queryFn: fetchUnreadCount,
+    enabled: !!user,
   });
 
   const markReadMutation = useMutation({
@@ -127,7 +123,7 @@ export default function NotificationsScreen() {
     const groups: Record<string, NotificationItem[]> = {};
     const order = ['Hôm nay', 'Hôm qua', 'Tuần này', 'Trước đó'];
 
-    for (const n of (notifications as unknown as NotificationItem[])) {
+    for (const n of notifications) {
       const group = getDateGroup(n.created_at);
       if (!groups[group]) groups[group] = [];
       groups[group].push(n);

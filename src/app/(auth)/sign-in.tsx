@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function SignInScreen() {
@@ -30,7 +31,7 @@ export default function SignInScreen() {
     try {
       await signIn(email.trim(), password);
     } catch (err: any) {
-      Alert.alert('Đăng nhập thất bại', err.message || 'Có lỗi xảy ra');
+      Alert.alert('Đăng nhập thất bại', toUserMessage(err, 'Có lỗi xảy ra'));
     } finally {
       setLoading(false);
     }

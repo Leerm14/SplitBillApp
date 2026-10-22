@@ -1,13 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link, useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Modal,
   Pressable,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -15,8 +15,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { createGroup, fetchGroups, joinGroup } from '@/api/groups';
-import { useQueryClient } from '@tanstack/react-query';
+import { toUserMessage } from '@/api/errors';
+import { createGroup, joinGroup } from '@/api/groups';
+import { ErrorState } from '@/components/error-state';
+import { useGroupsList } from '@/hooks/use-groups';
 
 export default function GroupsScreen() {
   const router = useRouter();
@@ -27,10 +29,12 @@ export default function GroupsScreen() {
   const [inviteCode, setInviteCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const { data: groups, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ['groups'],
-    queryFn: fetchGroups,
-  });
+  // REV-A1 / REV-S4: danh sách theo người dùng; tách nhóm đang hoạt động và nhóm "Đã lưu trữ"
+  const { isLoading, refetch, isRefetching, error, data, activeGroups, archivedGroups } = useGroupsList();
+  const sections = [
+    { key: 'active', title: null as string | null, data: activeGroups },
+    ...(archivedGroups.length > 0 ? [{ key: 'archived', title: 'Đã lưu trữ', data: archivedGroups }] : []),
+  ];
 
   const handleCreateGroup = async () => {
     if (!groupName.trim()) {
@@ -45,7 +49,7 @@ export default function GroupsScreen() {
       setGroupName('');
       router.push(`/group/${group.id}` as any);
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Không thể tạo nhóm');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tạo nhóm'));
     } finally {
       setSubmitting(false);
     }
@@ -64,7 +68,7 @@ export default function GroupsScreen() {
       setInviteCode('');
       router.push(`/group/${group.id}` as any);
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Mã mời không hợp lệ');
+      Alert.alert('Lỗi', toUserMessage(err, 'Mã mời không hợp lệ'));
     } finally {
       setSubmitting(false);
     }
@@ -90,35 +94,58 @@ export default function GroupsScreen() {
         </Pressable>
       </View>
 
-      <FlatList
-        data={groups ?? []}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); }} />
-        }
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>👥</Text>
-            <Text style={styles.emptyText}>Chưa có nhóm nào</Text>
-            <Text style={styles.emptyHint}>Tạo nhóm mới hoặc nhập mã mời để bắt đầu</Text>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <Pressable
-            style={styles.card}
-            onPress={() => router.push(`/group/${item.id}` as any)}
-          >
-            <View>
-              <Text style={styles.groupName}>{item.name}</Text>
-              <Text style={styles.groupMeta}>
-                {item.role === 'owner' ? 'Chủ nhóm' : 'Thành viên'} · Mã: {item.invite_code}
-              </Text>
-            </View>
-            <Text style={styles.arrow}>›</Text>
-          </Pressable>
-        )}
-      />
+      {/* APP-19: lỗi tải danh sách — không hiện như "chưa có nhóm" */}
+      {error && !data ? (
+        <ErrorState message={toUserMessage(error, 'Không thể tải danh sách nhóm')} onRetry={() => refetch()} />
+      ) : (
+        <SectionList
+          sections={sections}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          stickySectionHeadersEnabled={false}
+          refreshControl={
+            <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); }} />
+          }
+          renderSectionHeader={({ section }) =>
+            section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
+          }
+          renderSectionFooter={({ section }) =>
+            section.key === 'active' && section.data.length === 0 ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyIcon}>👥</Text>
+                <Text style={styles.emptyText}>Chưa có nhóm nào đang hoạt động</Text>
+                <Text style={styles.emptyHint}>Tạo nhóm mới hoặc nhập mã mời để bắt đầu</Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item, section }) => {
+            const archived = section.key === 'archived';
+            // REV-S4: nhóm lưu trữ — nói rõ vì sao (đã rời / bị xóa / nhóm đã đóng)
+            const archivedReason =
+              item.memberStatus === 'LEFT'
+                ? 'Bạn đã rời nhóm'
+                : item.memberStatus === 'REMOVED'
+                  ? 'Bạn đã bị xóa khỏi nhóm'
+                  : 'Nhóm đã đóng';
+            return (
+              <Pressable
+                style={[styles.card, archived && styles.cardArchived]}
+                onPress={() => router.push(`/group/${item.id}` as any)}
+              >
+                <View style={styles.cardInfo}>
+                  <Text style={styles.groupName}>{item.name}</Text>
+                  <Text style={styles.groupMeta}>
+                    {archived
+                      ? archivedReason
+                      : `${item.role === 'owner' ? 'Chủ nhóm' : 'Thành viên'} · Mã: ${item.invite_code}`}
+                  </Text>
+                </View>
+                <Text style={styles.arrow}>›</Text>
+              </Pressable>
+            );
+          }}
+        />
+      )}
 
       {/* Modal tạo nhóm */}
       <Modal visible={showCreate} transparent animationType="slide">
@@ -233,6 +260,9 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  cardArchived: { opacity: 0.7 },
+  cardInfo: { flex: 1 },
+  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#8E8E93', marginTop: 12, marginBottom: 4 },
   groupName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
   groupMeta: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
   arrow: { fontSize: 22, color: '#C7C7CC', fontWeight: '300' },

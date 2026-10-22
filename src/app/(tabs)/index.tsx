@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
 import {
@@ -12,17 +12,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { fetchExpenses } from '@/api/expenses';
-import { fetchGroups, fetchGroupMembers } from '@/api/groups';
+import { fetchMyGroupBalances, type GroupWithRole } from '@/api/groups';
 import { fetchPayments } from '@/api/payments';
+import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
-import {
-  computeBalances,
-  type ExpenseInput,
-  type PaymentInput,
-} from '@/domain/settlement';
-import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupsList } from '@/hooks/use-groups';
 
 /** Format a date string as relative Vietnamese text */
 function formatRelativeDate(dateStr: string): string {
@@ -53,60 +50,54 @@ function getTimeOfDayGreeting(): string {
   return 'Chào buổi tối';
 }
 
-/** Compute balance for a single group given data already fetched */
-function computeGroupBalance(
-  members: any[] | undefined,
-  expenses: any[] | undefined,
-  payments: any[] | undefined,
-  userId: string,
-): number | null {
-  if (!members || !expenses || !payments) return null;
-  try {
-    const memberIds = members.map((m: any) => m.id);
-    const expInput: ExpenseInput[] = expenses.map((e: any) => ({
-      paidBy: e.paid_by,
-      status: e.status,
-      shares: e.expense_shares.map((s: any) => ({
-        userId: s.user_id,
-        amount: Number(s.amount),
-      })),
-    }));
-    const payInput: PaymentInput[] = payments.map((p: any) => ({
-      fromId: p.from_id,
-      toId: p.to_id,
-      amount: Number(p.amount),
-      status: p.status,
-    }));
-    const bal = computeBalances(memberIds, expInput, payInput);
-    return bal.get(userId) ?? 0;
-  } catch {
-    return null;
-  }
-}
-
 export default function HomeScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const queryClient = useQueryClient();
 
-  const { data: groups, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ['groups'],
-    queryFn: fetchGroups,
+  // REV-A1 / REV-S4: danh sách theo người dùng; Home chỉ hiện nhóm đang hoạt động (mình ACTIVE, nhóm ACTIVE)
+  const {
+    data: allGroups,
+    activeGroups: groups,
+    isLoading,
+    refetch,
+    isRefetching,
+    error: groupsError,
+  } = useGroupsList();
+  const myId = user?.id ?? null;
+
+  // REV-S7: đăng ký theo dõi khoản chi / thanh toán của từng nhóm (useQueries) — danh sách
+  // "Giao dịch gần đây" và huy hiệu chờ xác nhận tự cập nhật khi cache đổi (không đọc getQueryData).
+  const expensesQs = useQueries({
+    queries: groups.map((g) => ({
+      queryKey: ['expenses', g.id],
+      queryFn: () => fetchExpenses(g.id),
+      staleTime: 60_000,
+      enabled: !!myId,
+    })),
+  });
+  const paymentsQs = useQueries({
+    queries: groups.map((g) => ({
+      queryKey: ['payments', g.id],
+      queryFn: () => fetchPayments(g.id),
+      staleTime: 60_000,
+      enabled: !!myId,
+    })),
   });
 
-  // APP-04: Fetch all balances from group_balances view for all groups at once
-  const { data: allBalances } = useQuery({
-    queryKey: ['all-group-balances', user?.id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('group_balances')
-        .select('group_id, user_id, balance')
-        .eq('user_id', user?.id ?? '');
-      if (error) throw error;
-      return data ?? [];
-    },
+  // APP-04: Fetch all balances from group_balances view for all groups at once.
+  // Key bắt đầu bằng 'groups' để các chỗ invalidate ['groups'] sau khi ghi cũng làm mới số dư.
+  const { data: allBalances, error: balancesError, refetch: refetchBalances } = useQuery({
+    queryKey: ['groups', 'my-balances', user?.id],
+    queryFn: () => fetchMyGroupBalances(user!.id),
     enabled: !!user,
   });
+
+  // APP-04: Số dư từng nhóm lấy từ view group_balances (không tự tính từ cache + try/catch)
+  const balanceByGroup = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const b of allBalances ?? []) map.set(b.groupId, b.officialBalance);
+    return map;
+  }, [allBalances]);
 
   /** Compute summary totals from group_balances view */
   const summaryTotals = useMemo(() => {
@@ -115,7 +106,7 @@ export default function HomeScreen() {
     let totalCollect = 0;
 
     for (const b of allBalances) {
-      const bal = Number(b.balance);
+      const bal = b.officialBalance;
       if (bal < 0) totalOwed += bal;
       if (bal > 0) totalCollect += bal;
     }
@@ -123,66 +114,55 @@ export default function HomeScreen() {
     return allBalances.length > 0 ? { totalOwed, totalCollect } : null;
   }, [groups, allBalances]);
 
-  /** Build list of recent transactions from cached data */
-  const recentTransactions = useMemo(() => {
-    if (!groups || groups.length === 0) return [];
+  /** Tên hiển thị từ quan hệ PostgREST (object hoặc mảng) */
+  const displayName = (v: unknown): string | null => {
+    const one = Array.isArray(v) ? v[0] : v;
+    return (one as { display_name?: string } | null)?.display_name ?? null;
+  };
+
+  /** REV-S7: Giao dịch gần đây từ các query đang theo dõi (tự cập nhật khi cache đổi) */
+  const recentTransactions: RecentTransaction[] = (() => {
     const items: RecentTransaction[] = [];
-
-    for (const g of groups) {
-      const expenses = queryClient.getQueryData<any[]>(['expenses', g.id]);
-      const payments = queryClient.getQueryData<any[]>(['payments', g.id]);
-
-      if (expenses) {
-        for (const e of expenses) {
-          items.push({
-            id: e.id,
-            type: 'expense',
-            description: e.description || 'Chi phí',
-            amount: Number(e.amount),
-            groupId: g.id,
-            groupName: g.name,
-            date: e.created_at,
-          });
-        }
+    groups.forEach((g, i) => {
+      for (const e of expensesQs[i]?.data ?? []) {
+        items.push({
+          id: e.id,
+          type: 'expense',
+          description: e.description || 'Chi phí',
+          amount: Number(e.amount),
+          groupId: g.id,
+          groupName: g.name,
+          date: e.created_at,
+        });
       }
-      if (payments) {
-        for (const p of payments) {
-          const senderName = p.sender?.display_name ?? 'Ai đó';
-          const receiverName = p.receiver?.display_name ?? 'Ai đó';
-          items.push({
-            id: p.id,
-            type: 'payment',
-            description: `${senderName} → ${receiverName}`,
-            amount: Number(p.amount),
-            groupId: g.id,
-            groupName: g.name,
-            date: p.created_at,
-          });
-        }
+      for (const p of paymentsQs[i]?.data ?? []) {
+        items.push({
+          id: p.id,
+          type: 'payment',
+          description: `${displayName(p.sender) ?? 'Ai đó'} → ${displayName(p.receiver) ?? 'Ai đó'}`,
+          amount: Number(p.amount),
+          groupId: g.id,
+          groupName: g.name,
+          date: p.created_at,
+        });
       }
-    }
-
+    });
     items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return items.slice(0, 5);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, isRefetching]);
+  })();
 
-  /** Count pending payments per group from cache */
-  const pendingCountByGroup = useMemo(() => {
-    const map: Record<string, number> = {};
-    if (!groups) return map;
-    for (const g of groups) {
-      const payments = queryClient.getQueryData<any[]>(['payments', g.id]);
-      if (payments) {
-        map[g.id] = payments.filter((p: any) => p.status === 'PENDING').length;
-      }
-    }
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, isRefetching]);
+  /** REV-S7: Huy hiệu chỉ đếm thanh toán PENDING mình cần xác nhận (người nhận) hoặc mình đã gửi */
+  const pendingCountByGroup: Record<string, number> = {};
+  groups.forEach((g, i) => {
+    const payments = paymentsQs[i]?.data;
+    if (!payments || !myId) return;
+    pendingCountByGroup[g.id] = payments.filter(
+      (p) => p.status === 'PENDING' && (p.to_id === myId || p.from_id === myId),
+    ).length;
+  });
 
-  /** Most recent group for FAB */
-  const mostRecentGroupId = groups && groups.length > 0 ? groups[0].id : null;
+  /** REV-S4: FAB / thêm nhanh khoản chi chỉ nhắm nhóm mình còn ACTIVE và nhóm chưa đóng */
+  const mostRecentGroupId = groups.length > 0 ? groups[0].id : null;
 
   const renderFooter = useCallback(() => {
     if (recentTransactions.length === 0) return null;
@@ -252,14 +232,19 @@ export default function HomeScreen() {
     );
   }
 
+  // APP-19: lỗi tải danh sách nhóm — không hiện như "chưa có nhóm"
+  if (groupsError && !allGroups) {
+    return <ErrorState message={toUserMessage(groupsError, 'Không thể tải danh sách nhóm')} onRetry={() => refetch()} />;
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <FlatList
-        data={groups ?? []}
+        data={groups}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={
-          <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); }} />
+          <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); refetchBalances(); }} />
         }
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={
@@ -273,7 +258,8 @@ export default function HomeScreen() {
         renderItem={({ item }) => (
           <GroupCard
             group={item}
-            userId={user?.id || ''}
+            // APP-04: undefined khi chưa tải được; group_balances không có dòng = số dư 0
+            balance={balancesError ? null : allBalances ? (balanceByGroup.get(item.id) ?? 0) : undefined}
             pendingCount={pendingCountByGroup[item.id] ?? 0}
             onPress={() => router.push(`/group/${item.id}` as any)}
           />
@@ -293,38 +279,17 @@ export default function HomeScreen() {
 
 function GroupCard({
   group,
-  userId,
+  balance,
   pendingCount,
   onPress,
 }: {
-  group: any;
-  userId: string;
+  group: GroupWithRole;
+  /** Số dư chính thức từ group_balances; null = lỗi tải; undefined = đang tải */
+  balance: number | null | undefined;
   pendingCount: number;
   onPress: () => void;
 }) {
-  const membersQ = useQuery({
-    queryKey: ['group-members', group.id],
-    queryFn: () => fetchGroupMembers(group.id),
-    staleTime: 60_000,
-  });
-
-  const expensesQ = useQuery({
-    queryKey: ['expenses', group.id],
-    queryFn: () => fetchExpenses(group.id),
-    staleTime: 60_000,
-  });
-
-  const paymentsQ = useQuery({
-    queryKey: ['payments', group.id],
-    queryFn: () => fetchPayments(group.id),
-    staleTime: 60_000,
-  });
-
-  const balance = useMemo(
-    () => computeGroupBalance(membersQ.data, expensesQ.data, paymentsQ.data, userId),
-    [membersQ.data, expensesQ.data, paymentsQ.data, userId],
-  );
-
+  // REV-S7: khoản chi / thanh toán được theo dõi ở HomeScreen (useQueries). Số dư lấy từ view (APP-04).
   return (
     <Pressable style={styles.card} onPress={onPress}>
       <View style={styles.cardLeft}>
@@ -341,7 +306,9 @@ function GroupCard({
         </Text>
       </View>
       <View style={styles.cardRight}>
-        {balance !== null && balance !== 0 ? (
+        {balance === null ? (
+          <Text style={styles.balanceError}>⚠️ Lỗi số dư</Text>
+        ) : balance !== undefined && balance !== 0 ? (
           <>
             <Text style={[styles.balanceAmount, balance > 0 ? styles.positive : styles.negative]}>
               {balance > 0 ? '+' : ''}{formatVND(balance)}
@@ -361,6 +328,7 @@ function GroupCard({
 }
 
 const styles = StyleSheet.create({
+  balanceError: { fontSize: 12, color: '#FF3B30' },
   container: { flex: 1, backgroundColor: '#f2f2f7' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   list: { padding: 16, gap: 12 },

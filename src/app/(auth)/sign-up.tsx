@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function SignUpScreen() {
@@ -50,7 +51,7 @@ export default function SignUpScreen() {
         ]);
       }
     } catch (err: any) {
-      Alert.alert('Đăng ký thất bại', err.message || 'Có lỗi xảy ra');
+      Alert.alert('Đăng ký thất bại', toUserMessage(err, 'Có lỗi xảy ra'));
     } finally {
       setLoading(false);
     }

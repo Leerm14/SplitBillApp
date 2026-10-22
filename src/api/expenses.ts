@@ -1,3 +1,4 @@
+import { throwApiError } from '@/api/errors';
 import { supabase } from '@/lib/supabase';
 
 // ============================
@@ -38,7 +39,7 @@ export type Expense = {
 };
 
 export async function fetchExpenses(groupId: string): Promise<Expense[]> {
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('expenses')
     .select(`
       id, group_id, paid_by, amount, description, status, split_method, note,
@@ -50,7 +51,7 @@ export async function fetchExpenses(groupId: string): Promise<Expense[]> {
     .eq('group_id', groupId)
     .order('created_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 
   // Deduplicate — RLS với nhiều SELECT policies có thể trả trùng row qua JOIN
   const seen = new Set<string>();
@@ -62,7 +63,7 @@ export async function fetchExpenses(groupId: string): Promise<Expense[]> {
 }
 
 export async function fetchExpense(expenseId: string): Promise<Expense> {
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('expenses')
     .select(`
       id, group_id, paid_by, amount, description, status, split_method, note,
@@ -73,21 +74,31 @@ export async function fetchExpense(expenseId: string): Promise<Expense> {
     `)
     .eq('id', expenseId)
     .single();
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data as Expense;
 }
+
+/**
+ * APP-09: Phần chia gửi lên RPC. Với PERCENT phải gửi kèm percentBp (phần vạn) —
+ * RPC đọc `_share->>'percentBp'` để lưu expense_shares.percent_bp.
+ */
+export type ExpenseShareInput = {
+  userId: string;
+  amount: number;
+  percentBp?: number | null;
+};
 
 export async function createExpense(params: {
   groupId: string;
   paidBy: string;
   amount: number;
   description: string;
-  shares: { userId: string; amount: number }[];
+  shares: ExpenseShareInput[];
   idempotencyKey: string;
   splitMethod?: string;
   note?: string;
 }) {
-  const { data, error } = await supabase.rpc('create_expense', {
+  const { data, error, status } = await supabase.rpc('create_expense', {
     _group_id: params.groupId,
     _paid_by: params.paidBy,
     _amount: params.amount,
@@ -97,7 +108,7 @@ export async function createExpense(params: {
     _split_method: params.splitMethod ?? 'EQUAL',
     _note: params.note ?? '',
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data;
 }
 
@@ -109,10 +120,10 @@ export async function updateExpense(params: {
   description: string;
   splitMethod: string;
   note: string;
-  shares: { userId: string; amount: number }[];
+  shares: ExpenseShareInput[];
   receiptPath?: string;
 }) {
-  const { data, error } = await supabase.rpc('update_expense', {
+  const { data, error, status } = await supabase.rpc('update_expense', {
     _expense_id: params.expenseId,
     _expected_version: params.expectedVersion,
     _paid_by: params.paidBy,
@@ -123,14 +134,14 @@ export async function updateExpense(params: {
     _shares: params.shares,
     _receipt_path: params.receiptPath ?? null,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data;
 }
 
 export async function cancelExpense(expenseId: string) {
-  const { data, error } = await supabase.rpc('cancel_expense', {
+  const { data, error, status } = await supabase.rpc('cancel_expense', {
     _expense_id: expenseId,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data;
 }

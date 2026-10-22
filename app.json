@@ -35,9 +35,15 @@
       "expo-router"
     ],
     "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
       "eas": {
-        "projectId": "your-project-id-here"
+        "projectId": "42e8bd1f-35bc-4ad5-bdd0-578e57e988f0"
       }
-    }
+    },
+    "owner": "leerm"
   }
 }

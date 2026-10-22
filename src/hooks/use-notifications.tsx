@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRootNavigationState, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { registerPushToken } from '@/api/notifications';
 import { useAuth } from '@/hooks/use-auth';
+import { setPendingLink } from '@/lib/pending-link';
 
 let Notifications: typeof import('expo-notifications') | null = null;
 let Device: typeof import('expo-device') | null = null;
 let Constants: typeof import('expo-constants')['default'] | null = null;
 
+// require trong try: các module này không có (hoặc lỗi) trên web
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Notifications = require('expo-notifications');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Device = require('expo-device');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Constants = require('expo-constants').default;
 } catch {
   // expo-notifications or expo-device not available (e.g., web)
@@ -29,90 +34,107 @@ if (Notifications) {
   });
 }
 
+/** APP-10: Đường dẫn trong app từ dữ liệu của thông báo (null nếu không có đích). */
+function pathFromNotificationData(data: any): string | null {
+  if (data?.expense_id && data?.group_id) return `/group/${data.group_id}/expense/${data.expense_id}`;
+  if (data?.payment_id) return `/payment/${data.payment_id}`;
+  if (data?.group_id) return `/group/${data.group_id}`;
+  return null;
+}
+
+/** REV-A8: Khóa của một lần bấm thông báo — để listener và cold start không điều hướng hai lần. */
+function responseKey(response: any): string {
+  return `${response?.notification?.request?.identifier ?? ''}|${response?.actionIdentifier ?? ''}`;
+}
+
 export function useNotifications() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const [expoPushToken, setExpoPushToken] = useState<string>('');
-  const notificationListener = useRef<any>(null);
-  const responseListener = useRef<any>(null);
+  const { user, loading } = useAuth();
+  const userId = user?.id ?? null;
+  // REV-A8: chỉ điều hướng khi navigator gốc đã gắn
+  const navigatorReady = !!useRootNavigationState()?.key;
+  const handledResponses = useRef(new Set<string>());
+  const userIdRef = useRef(userId);
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
-  // APP-10: Handle notification data for navigation
-  const handleNotificationData = useCallback((data: any) => {
-    if (data?.expense_id && data?.group_id) {
-      router.push(
-        `/group/${data.group_id}/expense/${data.expense_id}` as any,
-      );
-    } else if (data?.payment_id) {
-      router.push(`/payment/${data.payment_id}` as any);
-    } else if (data?.group_id) {
-      router.push(`/group/${data.group_id}` as any);
-    }
-  }, [router]);
-
-  const registerPushTokenAsync = useCallback(async () => {
-    if (!Notifications || !Device) return;
-
-    try {
-      const token = await registerForPushNotificationsAsync();
-      if (token) {
-        setExpoPushToken(token);
-        registerPushToken(token, Platform.OS).catch(console.error);
+  /**
+   * APP-10 / REV-A8: Mở đích của thông báo. Chưa đăng nhập → lưu lại như liên kết mời,
+   * AuthGate mở sau khi đăng nhập xong. Mỗi lần bấm chỉ xử lý một lần.
+   */
+  const handleResponse = useCallback(
+    (response: any) => {
+      const key = responseKey(response);
+      if (handledResponses.current.has(key)) return;
+      handledResponses.current.add(key);
+      const path = pathFromNotificationData(response?.notification?.request?.content?.data);
+      try {
+        Notifications?.clearLastNotificationResponse();
+      } catch (e) {
+        console.warn('[Push] Không xóa được phản hồi thông báo gần nhất:', e);
       }
-    } catch (e) {
-      console.error('Error registering push token:', e);
-    }
-  }, []);
+      if (!path) return;
+      if (userIdRef.current) router.push(path as any);
+      else setPendingLink(path);
+    },
+    [router],
+  );
 
-  // APP-10: Only register push token AFTER user is authenticated
+  // APP-10 / REV-A4: Đăng ký push token SAU khi đăng nhập; chạy lại ở MỖI lần đăng nhập (userId đổi
+  // null → id) để RPC register_push_token dọn dòng cũ của máy này khỏi tài khoản khác.
   useEffect(() => {
-    if (user) {
-      registerPushTokenAsync();
-    }
-  }, [user, registerPushTokenAsync]);
+    if (!userId || !Notifications || !Device) return;
+    let cancelled = false;
+    registerForPushNotificationsAsync()
+      .then((token) => {
+        if (!cancelled && token) {
+          return registerPushToken(token, Platform.OS);
+        }
+      })
+      .catch((e) => console.error('Error registering push token:', e));
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (!Notifications || !Device) return;
-
     const NotificationsModule = Notifications;
 
-    // Handle notification received while app is open
-    notificationListener.current =
-      NotificationsModule.addNotificationReceivedListener(() => {
-        queryClient.invalidateQueries({ queryKey: ['notifications'] });
-        queryClient.invalidateQueries({ queryKey: ['unread-count'] });
-      });
+    // Thông báo tới khi app đang mở
+    const received = NotificationsModule.addNotificationReceivedListener(() => {
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      queryClient.invalidateQueries({ queryKey: ['unread-count'] });
+    });
 
-    // User tapped notification
-    responseListener.current =
-      NotificationsModule.addNotificationResponseReceivedListener((response: any) => {
-        try {
-          const data = response.notification.request.content.data;
-          handleNotificationData(data);
-        } catch (e) {
-          console.error('Error handling notification response:', e);
-        }
-      });
-
-    // APP-10: Handle cold start notification
-    NotificationsModule.getLastNotificationResponseAsync().then((response) => {
-      if (response) {
-        const data = response.notification.request.content.data;
-        handleNotificationData(data);
+    // Người dùng bấm thông báo khi app đang chạy
+    const response = NotificationsModule.addNotificationResponseReceivedListener((r) => {
+      try {
+        handleResponse(r);
+      } catch (e) {
+        console.error('Error handling notification response:', e);
       }
     });
 
     return () => {
-      if (notificationListener.current) {
-        notificationListener.current.remove();
-      }
-      if (responseListener.current) {
-        responseListener.current.remove();
-      }
+      received.remove();
+      response.remove();
     };
-  }, [queryClient, handleNotificationData]);
+  }, [queryClient, handleResponse]);
 
-  return { expoPushToken };
+  // REV-A8: Cold start — đọc phản hồi gần nhất (API đồng bộ của SDK 58) khi auth đã xác định
+  // và navigator đã gắn; trùng với listener thì handledResponses bỏ qua.
+  useEffect(() => {
+    if (!Notifications || loading || !navigatorReady) return;
+    try {
+      const last = Notifications.getLastNotificationResponse();
+      if (last) handleResponse(last);
+    } catch (e) {
+      console.error('Error reading last notification response:', e);
+    }
+  }, [loading, navigatorReady, handleResponse]);
 }
 
 async function registerForPushNotificationsAsync(): Promise<
@@ -137,13 +159,29 @@ async function registerForPushNotificationsAsync(): Promise<
       return undefined;
     }
 
-    // APP-10: Add projectId to getExpoPushTokenAsync
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: Constants?.expoConfig?.extra?.eas?.projectId,
-    });
+    // APP-10: projectId lấy từ expo-constants (app.json → extra.eas.projectId).
+    // Còn là giá trị mẫu thì bỏ qua đăng ký push thay vì crash.
+    const projectId = getEasProjectId();
+    if (!projectId) {
+      console.warn(
+        '[Push] Chưa cấu hình EAS projectId (app.json → expo.extra.eas.projectId đang là giá trị mẫu). ' +
+          'Bỏ qua đăng ký push. Chạy `npx eas-cli@latest init` hoặc điền projectId thật.',
+      );
+      return undefined;
+    }
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     return tokenData.data;
   } catch (e) {
     console.error('Error registering for push notifications:', e);
     return undefined;
   }
+}
+
+const PLACEHOLDER_PROJECT_IDS = new Set(['', 'your-project-id-here']);
+
+/** APP-10: projectId của EAS, hoặc null khi thiếu / còn giá trị mẫu */
+function getEasProjectId(): string | null {
+  const id: unknown = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+  if (typeof id !== 'string' || PLACEHOLDER_PROJECT_IDS.has(id.trim())) return null;
+  return id.trim();
 }

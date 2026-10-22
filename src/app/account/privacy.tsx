@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -12,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { fetchProfile, updateProfile } from '@/api/profiles';
 
 export default function PrivacyScreen() {
@@ -37,7 +37,7 @@ export default function PrivacyScreen() {
     onError: (err: any) => {
       // Revert on error — reset local override so server value is used
       setLocalSearchable(null);
-      Alert.alert('Lỗi', err.message || 'Không thể cập nhật');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể cập nhật'));
     },
   });
 

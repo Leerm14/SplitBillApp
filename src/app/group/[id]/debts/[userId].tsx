@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import {
@@ -11,115 +10,84 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { fetchExpenses } from '@/api/expenses';
-import { fetchGroupMembers } from '@/api/groups';
-import { fetchPayments } from '@/api/payments';
+import { toUserMessage } from '@/api/errors';
+import { ErrorState } from '@/components/error-state';
+import { explainDebt, type ExpenseContribution } from '@/domain/explain';
 import { formatVND } from '@/domain/money';
-import {
-  explainDebt,
-  type DebtExplanation,
-  type ExpenseContribution,
-} from '@/domain/explain';
-import {
-  computeBalances,
-  simplifyDebts,
-  type PaymentInput,
-} from '@/domain/settlement';
-import type { ExpenseInput } from '@/domain/explain';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupSettlement } from '@/hooks/use-group-settlement';
 
 export default function DebtDetailScreen() {
-  const { id: groupId, userId: targetUserId } = useLocalSearchParams<{ id: string; userId: string }>();
+  // APP-16: `from` (tùy chọn) cho phép mở cặp giữa hai người khác: from ↔ userId
+  const { id: groupId, userId: targetUserId, from } = useLocalSearchParams<{
+    id: string;
+    userId: string;
+    from?: string;
+  }>();
   const router = useRouter();
   const { user } = useAuth();
 
-  const membersQ = useQuery({
-    queryKey: ['group-members', groupId],
-    queryFn: () => fetchGroupMembers(groupId),
-  });
+  const {
+    paymentsQ,
+    memberNames,
+    getName,
+    expenseInputs,
+    paymentInputs,
+    settlement,
+    settlementError,
+    isUnsynced,
+    isViewerActive,
+    canWrite,
+    isLoading,
+    queryError,
+    refetchAll,
+  } = useGroupSettlement(groupId);
 
-  const expensesQ = useQuery({
-    queryKey: ['expenses', groupId],
-    queryFn: () => fetchExpenses(groupId),
-  });
+  // Bên "chủ thể" của cặp: người được truyền qua `from`, mặc định là chính mình
+  const subjectId = from || user?.id || '';
+  const isSelf = subjectId === user?.id;
 
-  const paymentsQ = useQuery({
-    queryKey: ['payments', groupId],
-    queryFn: () => fetchPayments(groupId),
-  });
+  // APP-06: gợi ý lấy từ suggestTransfers (theo công tắc của nhóm) qua useGroupSettlement
+  const debtInfo = useMemo(() => {
+    if (!settlement || !subjectId) return null;
+    const subjectOwes = settlement.suggestions.find((t) => t.from === subjectId && t.to === targetUserId);
+    const targetOwes = settlement.suggestions.find((t) => t.from === targetUserId && t.to === subjectId);
+    // REV-S1: truyền đủ bộ gợi ý để lời giải thích không mâu thuẫn với số tiền chuyển
+    const opts = { simplify: settlement.simplify, transfers: settlement.suggestions };
 
-  const isLoading = membersQ.isLoading || expensesQ.isLoading || paymentsQ.isLoading;
-
-  const memberNames = useMemo(() => {
-    if (!membersQ.data) return new Map<string, string>();
-    return new Map(membersQ.data.map((m: any) => [m.id, m.displayName || m.id.slice(0, 8)]));
-  }, [membersQ.data]);
-
-  const getName = (uid: string) => memberNames.get(uid) || uid.slice(0, 8);
-
-  // Chuẩn bị dữ liệu
-  const expenseInputs = useMemo(() => {
-    if (!expensesQ.data) return [];
-    return expensesQ.data.map((e: any) => ({
-      id: e.id as string,
-      paidBy: e.paid_by,
-      status: e.status,
-      description: e.description || 'Khoản chi',
-      shares: e.expense_shares.map((s: any) => ({
-        userId: s.user_id,
-        amount: Number(s.amount),
-      })),
-    }));
-  }, [expensesQ.data]);
-
-  const paymentInputs = useMemo((): PaymentInput[] => {
-    if (!paymentsQ.data) return [];
-    return paymentsQ.data.map((p: any) => ({
-      fromId: p.from_id,
-      toId: p.to_id,
-      amount: Number(p.amount),
-      status: p.status,
-    }));
-  }, [paymentsQ.data]);
-
-  // Tính nợ giữa user hiện tại và target user
-  const debtInfo = useMemo((): { explanation: DebtExplanation; direction: 'owe' | 'owed' | 'settled' } | null => {
-    if (!membersQ.data || !user) return null;
-    const memberIds = membersQ.data.map((m: any) => m.id);
-
-    try {
-      const projected = computeBalances(memberIds, expenseInputs, paymentInputs, { includePending: true });
-      const suggestions = simplifyDebts(projected);
-
-      // Tìm transfer liên quan đến cả hai
-      const myDebt = suggestions.find((t) => t.from === user.id && t.to === targetUserId);
-      const theirDebt = suggestions.find((t) => t.from === targetUserId && t.to === user.id);
-
-      if (myDebt) {
-        const explanation = explainDebt(user.id, targetUserId, myDebt.amount, expenseInputs, paymentInputs, memberNames);
-        return { explanation, direction: 'owe' };
-      } else if (theirDebt) {
-        const explanation = explainDebt(targetUserId, user.id, theirDebt.amount, expenseInputs, paymentInputs, memberNames);
-        return { explanation, direction: 'owed' };
-      } else {
-        // Không có nợ trực tiếp — hiển thị giải thích rỗng
-        const explanation = explainDebt(user.id, targetUserId, 0, expenseInputs, paymentInputs, memberNames);
-        return { explanation, direction: 'settled' };
-      }
-    } catch {
-      return null;
+    if (subjectOwes) {
+      return {
+        direction: 'owe' as const,
+        debtor: subjectId,
+        creditor: targetUserId,
+        explanation: explainDebt(subjectId, targetUserId, subjectOwes.amount, expenseInputs, paymentInputs, memberNames, opts),
+      };
     }
-  }, [membersQ.data, expenseInputs, paymentInputs, user, targetUserId, memberNames]);
+    if (targetOwes) {
+      return {
+        direction: 'owed' as const,
+        debtor: targetUserId,
+        creditor: subjectId,
+        explanation: explainDebt(targetUserId, subjectId, targetOwes.amount, expenseInputs, paymentInputs, memberNames, opts),
+      };
+    }
+    return {
+      direction: 'settled' as const,
+      debtor: subjectId,
+      creditor: targetUserId,
+      explanation: explainDebt(subjectId, targetUserId, 0, expenseInputs, paymentInputs, memberNames, opts),
+    };
+  }, [settlement, subjectId, targetUserId, expenseInputs, paymentInputs, memberNames]);
 
   // Thanh toán liên quan giữa hai người
   const relatedPayments = useMemo(() => {
-    if (!paymentsQ.data || !user) return [];
+    if (!paymentsQ.data || !subjectId) return [];
     return paymentsQ.data.filter(
-      (p: any) =>
-        (p.from_id === user.id && p.to_id === targetUserId) ||
-        (p.from_id === targetUserId && p.to_id === user.id)
+      (p) =>
+        (p.from_id === subjectId && p.to_id === targetUserId) ||
+        (p.from_id === targetUserId && p.to_id === subjectId)
     );
-  }, [paymentsQ.data, user, targetUserId]);
+  }, [paymentsQ.data, subjectId, targetUserId]);
 
   if (isLoading) {
     return (
@@ -130,24 +98,33 @@ export default function DebtDetailScreen() {
   }
 
   // APP-19: Hiển thị lỗi thay vì dữ liệu trống
-  const queryError = membersQ.error || expensesQ.error || paymentsQ.error;
   if (queryError) {
+    return <ErrorState message={toUserMessage(queryError, 'Không thể tải dữ liệu')} onRetry={refetchAll} />;
+  }
+
+  // REV-S5: người đã rời nhóm không xem công nợ
+  if (!isViewerActive) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>⚠️ {(queryError as Error).message || 'Không thể tải dữ liệu'}</Text>
-      </View>
+      <ErrorState
+        title="Bạn đã rời nhóm"
+        message="Công nợ chỉ hiển thị cho thành viên đang ở trong nhóm. Bạn vẫn xem được lịch sử của nhóm."
+      />
     );
   }
 
-  if (!debtInfo) {
+  // APP-01: lỗi tính công nợ (BR-02) — báo lỗi, không hiện gợi ý
+  if (settlementError || !debtInfo) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>Không thể tải thông tin công nợ</Text>
-      </View>
+      <ErrorState
+        title="Không tính được công nợ"
+        message={settlementError ? 'Số liệu của nhóm không khớp. Lỗi đã được ghi lại.' : null}
+        onRetry={refetchAll}
+      />
     );
   }
 
-  const { explanation, direction } = debtInfo;
+  const { explanation, direction, debtor, creditor } = debtInfo;
+  const subjectLabel = isSelf ? 'Bạn' : getName(subjectId);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -155,16 +132,18 @@ export default function DebtDetailScreen() {
         {/* Header */}
         <View style={styles.card}>
           <Text style={styles.pairTitle}>
-            {getName(user!.id)} ↔ {getName(targetUserId)}
+            {getName(subjectId)} ↔ {getName(targetUserId)}
           </Text>
           {direction === 'owe' ? (
             <View style={styles.debtSummary}>
-              <Text style={styles.debtDirection}>Bạn nợ {getName(targetUserId)}</Text>
+              <Text style={styles.debtDirection}>{subjectLabel} nợ {getName(targetUserId)}</Text>
               <Text style={[styles.debtAmount, styles.negative]}>{formatVND(explanation.amount)}</Text>
             </View>
           ) : direction === 'owed' ? (
             <View style={styles.debtSummary}>
-              <Text style={styles.debtDirection}>{getName(targetUserId)} nợ bạn</Text>
+              <Text style={styles.debtDirection}>
+                {getName(targetUserId)} nợ {isSelf ? 'bạn' : getName(subjectId)}
+              </Text>
               <Text style={[styles.debtAmount, styles.positive]}>{formatVND(explanation.amount)}</Text>
             </View>
           ) : (
@@ -179,15 +158,18 @@ export default function DebtDetailScreen() {
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Giải thích</Text>
             <Text style={styles.summaryText}>{explanation.summary}</Text>
+            {isUnsynced && (
+              <Text style={styles.unsyncedLabel}>⚠️ Chưa đồng bộ — tính trên dữ liệu đã lưu trên máy</Text>
+            )}
           </View>
         )}
 
-        {/* Chi tiết khoản chi */}
-        {explanation.contributions.length > 0 && (
+        {/* Chi tiết khoản chi — REV-S1: cặp đã cân bằng không liệt kê phần chịu */}
+        {!explanation.balanced && (explanation.contributions.length > 0 || explanation.paymentLines.length > 0) && (
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Khoản chi liên quan</Text>
-            {explanation.contributions.map((c: ExpenseContribution, i: number) => (
-              <View key={i} style={styles.contributionRow}>
+            <Text style={styles.cardLabel}>Phần {getName(debtor)} chịu trong các khoản chi</Text>
+            {explanation.contributions.map((c: ExpenseContribution) => (
+              <View key={c.expenseId} style={styles.contributionRow}>
                 <View style={styles.contributionInfo}>
                   <Text style={styles.contributionDesc}>{c.description}</Text>
                   <Text style={styles.contributionPayer}>{getName(c.paidBy)} trả</Text>
@@ -197,15 +179,50 @@ export default function DebtDetailScreen() {
             ))}
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Tổng phần chịu</Text>
-              <Text style={styles.totalAmount}>{formatVND(explanation.totalOwedToRecipient)}</Text>
+              <Text style={styles.totalAmount}>{formatVND(explanation.totalShare)}</Text>
             </View>
-            {explanation.totalPaidToRecipient > 0 && (
+            {explanation.totalAdvanced > 0 && (
               <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Đã thanh toán</Text>
+                <Text style={styles.totalLabel}>
+                  {getName(debtor)} đã ứng {settlement?.simplify ? 'cho người khác' : `cho ${getName(creditor)}`}
+                </Text>
                 <Text style={[styles.totalAmount, styles.positive]}>
-                  -{formatVND(explanation.totalPaidToRecipient)}
+                  -{formatVND(explanation.totalAdvanced)}
                 </Text>
               </View>
+            )}
+            {/* REV-S1: mọi thanh toán CONFIRMED / PENDING được tính (kể cả với người thứ ba) */}
+            {explanation.paymentLines.map((l) => (
+              <View key={`${l.direction}-${l.counterparty}-${l.status}`} style={styles.totalRow}>
+                <Text style={styles.totalLabel}>
+                  {l.direction === 'sent'
+                    ? `Đã ${l.status === 'PENDING' ? 'gửi' : 'trả'} ${getName(l.counterparty)}`
+                    : `${getName(l.counterparty)} đã gửi ${getName(debtor)}`}
+                  {l.status === 'PENDING' ? ' (chờ xác nhận)' : ''}
+                </Text>
+                <Text style={[styles.totalAmount, l.direction === 'sent' ? styles.positive : styles.negative]}>
+                  {l.direction === 'sent' ? '-' : '+'}
+                  {formatVND(l.amount)}
+                </Text>
+              </View>
+            ))}
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Còn phải trả</Text>
+              <Text style={styles.totalAmount}>{formatVND(explanation.itemsTotal)}</Text>
+            </View>
+            {/* REV-S1: nhiều lần chuyển → tách tổng theo người nhận */}
+            {settlement?.simplify && explanation.outgoing.length > 1 &&
+              explanation.outgoing.map((t) => (
+                <View key={t.to} style={styles.totalRow}>
+                  <Text style={styles.contributionPayer}>→ Chuyển {getName(t.to)}</Text>
+                  <Text style={styles.contributionAmount}>{formatVND(t.amount)}</Text>
+                </View>
+              ))}
+            {explanation.mismatch !== 0 && (
+              <Text style={styles.unsyncedLabel}>
+                ⚠️ Chênh {formatVND(Math.abs(explanation.mismatch))} so với {formatVND(explanation.expectedTotal)} cần
+                trả — do bù trừ nợ trong nhóm hoặc dữ liệu chưa đồng bộ.
+              </Text>
             )}
           </View>
         )}
@@ -214,12 +231,12 @@ export default function DebtDetailScreen() {
         {relatedPayments.length > 0 && (
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Lịch sử thanh toán</Text>
-            {relatedPayments.map((p: any) => {
+            {relatedPayments.map((p) => {
               const statusLabel =
                 p.status === 'PENDING' ? '⏳ Chờ xác nhận' :
                 p.status === 'CONFIRMED' ? '✅ Đã xác nhận' :
                 p.status === 'REJECTED' ? '❌ Từ chối' :
-                p.status === 'DISPUTED' ? '⚠️ Tranh chấp' :
+                p.status === 'DISPUTED' ? '⚠️ Báo sai lệch' :
                 p.status === 'CANCELLED' ? '🚫 Đã hủy' : p.status;
               return (
                 <View key={p.id} style={styles.paymentRow}>
@@ -242,12 +259,12 @@ export default function DebtDetailScreen() {
         )}
 
         {/* Nút thanh toán */}
-        {direction === 'owe' && explanation.amount > 0 && (
+        {canWrite && direction !== 'settled' && debtor === user?.id && explanation.amount > 0 && (
           <Pressable
             style={styles.payBtn}
-            onPress={() => router.push(`/group/${groupId}/pay` as any)}
+            onPress={() => router.push(`/group/${groupId}/pay?to=${creditor}` as any)}
           >
-            <Text style={styles.payBtnText}>💸 Thanh toán cho {getName(targetUserId)}</Text>
+            <Text style={styles.payBtnText}>💸 Thanh toán cho {getName(creditor)}</Text>
           </Pressable>
         )}
       </ScrollView>
@@ -297,6 +314,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   summaryText: { fontSize: 15, color: '#1a1a1a', lineHeight: 22 },
+  unsyncedLabel: { fontSize: 13, color: '#E65100' },
 
   contributionRow: {
     flexDirection: 'row',

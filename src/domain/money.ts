@@ -15,35 +15,35 @@ export function formatVND(amount: number): string {
 }
 
 /**
- * Parse chuỗi số tiền nhập bởi user (bỏ dấu chấm, dấu phẩy, ký tự đ).
- * DOM-03: Reject decimal commas/dots and check MAX_SAFE_INTEGER.
- * @returns Số nguyên VND hoặc null nếu không hợp lệ.
+ * Đọc chuỗi số tiền người dùng nhập.
+ * Chấp nhận: "45000", "45.000", "1,500,000", "50 000", "45.000đ", "45.000₫".
+ * DOM-03: Từ chối dấu thập phân ("45,5", "45.5", "1,000,5"), trộn hai loại dấu ("1.500,000"),
+ * nhóm không đủ 3 chữ số, và số vượt Number.MAX_SAFE_INTEGER.
+ * @returns Số nguyên VND dương hoặc null nếu không hợp lệ.
  */
 export function parseVND(input: string): number | null {
   if (!input || typeof input !== 'string') return null;
 
-  const trimmed = input.trim();
+  // Bỏ khoảng trắng (kể cả NBSP) và ký hiệu tiền tệ
+  const compact = input.trim().replace(/[\sđ₫]/g, ''); // \s đã gồm cả NBSP
+  if (!compact) return null;
 
-  // DOM-03: Detect and reject decimal comma/dot (e.g., "45,5" or "45.5" with no grouping)
-  // Valid grouping: "100.000" (exactly 3 digits after separator)
-  // Invalid decimal: "45,5" or "100.5"
-  if (/,\d{1,2}$/.test(trimmed) && !/,\d{3}/.test(trimmed)) {
-    return null; // Looks like decimal comma
+  let digits = compact;
+  if (/[.,]/.test(compact)) {
+    // Chỉ chấp nhận dấu phân cách hàng nghìn: nhóm đầu 1–3 chữ số, các nhóm sau đúng 3 chữ số,
+    // và chỉ dùng một loại dấu.
+    const dotGrouped = /^\d{1,3}(\.\d{3})+$/.test(compact);
+    const commaGrouped = /^\d{1,3}(,\d{3})+$/.test(compact);
+    if (!dotGrouped && !commaGrouped) return null;
+    digits = compact.replace(/[.,]/g, '');
   }
-  if (/\.\d{1,2}$/.test(trimmed) && !/\.\d{3}/.test(trimmed)) {
-    return null; // Looks like decimal point
-  }
 
-  // Remove thousand separators and currency symbols
-  const cleaned = trimmed.replace(/[.,\sđ₫]/g, '');
+  if (!/^\d+$/.test(digits)) return null;
 
-  if (!/^\d+$/.test(cleaned)) return null;
-
-  const value = parseInt(cleaned, 10);
-
-  // DOM-03: Check MAX_SAFE_INTEGER
-  if (isNaN(value) || value <= 0 || value > Number.MAX_SAFE_INTEGER) return null;
+  // Quá 16 chữ số chắc chắn vượt MAX_SAFE_INTEGER (9.007.199.254.740.991)
+  if (digits.replace(/^0+/, '').length > 16) return null;
+  const value = Number(digits);
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
 
   return value;
 }
-

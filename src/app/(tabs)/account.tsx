@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { fetchProfile, getAvatarUrl } from '@/api/profiles';
 import { useAuth } from '@/hooks/use-auth';
 
@@ -31,7 +32,14 @@ export default function AccountScreen() {
       {
         text: 'Đăng xuất',
         style: 'destructive',
-        onPress: signOut,
+        onPress: async () => {
+          try {
+            await signOut();
+          } catch (err) {
+            // APP-02: đăng xuất lỗi (mất mạng) thì phiên vẫn còn — báo người dùng thử lại
+            Alert.alert('Lỗi', toUserMessage(err, 'Không thể đăng xuất. Vui lòng thử lại.'));
+          }
+        },
       },
     ]);
   };

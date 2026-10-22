@@ -1,4 +1,4 @@
-import { splitEqual, validateShares } from "./split";
+import { bpToPercentText, FULL_BP, parsePercentToBp, percentInputsToBp, splitEqual, splitPercent, splitPercentEqually, validateShares } from "./split";
 
 // ─── splitEqual ─────────────────────────────────────────────────────────────
 
@@ -169,3 +169,133 @@ function mulberry32(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+// DOM-04 / APP-09: chia theo phần trăm (phần vạn)
+describe("splitPercent", () => {
+  const sum = (xs: { amount: number }[]) => xs.reduce((s, x) => s + x.amount, 0);
+
+  test("50/50 chia đúng", () => {
+    expect(splitPercent(100_000, [{ userId: "B", bp: 5000 }, { userId: "A", bp: 5000 }])).toEqual([
+      { userId: "A", amount: 50_000, percentBp: 5000 },
+      { userId: "B", amount: 50_000, percentBp: 5000 },
+    ]);
+  });
+
+  test("Phần dư cộng 1đ theo user_id tăng dần", () => {
+    // 100đ × 33,33% = 33,33 → 33 mỗi người, dư 1đ (100 − 99) → người có mã nhỏ nhất
+    const r = splitPercent(100, [
+      { userId: "c", bp: 3333 },
+      { userId: "a", bp: 3333 },
+      { userId: "b", bp: 3334 },
+    ]);
+    expect(r.map((x) => x.userId)).toEqual(["a", "b", "c"]);
+    expect(r.map((x) => x.amount)).toEqual([34, 33, 33]);
+    expect(sum(r)).toBe(100);
+  });
+
+  test("Tổng phần chia luôn bằng tổng khoản chi", () => {
+    for (const amount of [1, 7, 99, 1_001, 45_000, 1_234_567, 999_999_999]) {
+      const r = splitPercent(amount, [
+        { userId: "u1", bp: 1 },
+        { userId: "u2", bp: 2999 },
+        { userId: "u3", bp: 3500 },
+        { userId: "u4", bp: 3500 },
+      ]);
+      expect(sum(r)).toBe(amount);
+    }
+  });
+
+  test("Người 0% không nhận phần dư", () => {
+    const r = splitPercent(10, [{ userId: "a", bp: 0 }, { userId: "b", bp: 3333 }, { userId: "c", bp: 6667 }]);
+    expect(r.find((x) => x.userId === "a")!.amount).toBe(0);
+    expect(sum(r)).toBe(10);
+  });
+
+  test("Số tiền lớn không mất chính xác", () => {
+    const amount = Number.MAX_SAFE_INTEGER;
+    const r = splitPercent(amount, [{ userId: "a", bp: 5000 }, { userId: "b", bp: 5000 }]);
+    expect(sum(r)).toBe(amount);
+  });
+
+  test("Tổng bp ≠ 10000 → throw", () => {
+    expect(() => splitPercent(100, [{ userId: "a", bp: 5000 }, { userId: "b", bp: 4000 }])).toThrow("100%");
+    expect(() => splitPercent(100, [{ userId: "a", bp: 6000 }, { userId: "b", bp: 5000 }])).toThrow("100%");
+  });
+
+  test("bp không hợp lệ hoặc trùng người → throw", () => {
+    expect(() => splitPercent(100, [{ userId: "a", bp: 50.5 }, { userId: "b", bp: 9949.5 }])).toThrow();
+    expect(() => splitPercent(100, [{ userId: "a", bp: -100 }, { userId: "b", bp: 10100 }])).toThrow();
+    expect(() => splitPercent(100, [{ userId: "a", bp: 5000 }, { userId: "a", bp: 5000 }])).toThrow("trùng");
+  });
+
+  test("Số tiền không hợp lệ hoặc danh sách rỗng → throw", () => {
+    expect(() => splitPercent(0, [{ userId: "a", bp: 10000 }])).toThrow();
+    expect(() => splitPercent(10.5, [{ userId: "a", bp: 10000 }])).toThrow();
+    expect(() => splitPercent(100, [])).toThrow();
+  });
+});
+
+describe("parsePercentToBp", () => {
+  test("Số nguyên và thập phân", () => {
+    expect(parsePercentToBp("50")).toBe(5000);
+    expect(parsePercentToBp("33.33")).toBe(3333);
+    expect(parsePercentToBp("33,3")).toBe(3330);
+    expect(parsePercentToBp("100")).toBe(10000);
+    expect(parsePercentToBp("")).toBe(0);
+  });
+
+  test("Không hợp lệ → null", () => {
+    expect(parsePercentToBp("100.01")).toBeNull();
+    expect(parsePercentToBp("12.345")).toBeNull();
+    expect(parsePercentToBp("-5")).toBeNull();
+    expect(parsePercentToBp("abc")).toBeNull();
+  });
+});
+
+describe("percentInputsToBp / bpToPercentText", () => {
+  test("Đọc ô nhập và hiển thị lại", () => {
+    expect(percentInputsToBp(["a", "b"], { a: "33.33", b: "66,67" })).toEqual([
+      { userId: "a", bp: 3333 },
+      { userId: "b", bp: 6667 },
+    ]);
+    expect(percentInputsToBp(["a"], { a: "x" })).toBeNull();
+    expect(bpToPercentText(3333)).toBe("33.33");
+    expect(bpToPercentText(3330)).toBe("33.3");
+    expect(bpToPercentText(5000)).toBe("50");
+    expect(bpToPercentText(5)).toBe("0.05");
+  });
+});
+
+describe("REV-S9: splitPercentEqually (Chia đều %)", () => {
+  test("Ba người: phần dư 1bp cho user_id nhỏ nhất, tổng đúng 100%", () => {
+    const bp = splitPercentEqually(["c", "a", "b"]);
+    expect(bp).toEqual([
+      { userId: "a", bp: 3334 },
+      { userId: "b", bp: 3333 },
+      { userId: "c", bp: 3333 },
+    ]);
+    expect(bp.reduce((s, x) => s + x.bp, 0)).toBe(FULL_BP);
+    expect(bp.map((x) => bpToPercentText(x.bp))).toEqual(["33.34", "33.33", "33.33"]);
+  });
+
+  test("Điền lại ô phần trăm rồi chia tiền được ngay (không báo lệch 100%)", () => {
+    const ids = ["u3", "u1", "u2"];
+    const inputs = Object.fromEntries(splitPercentEqually(ids).map((x) => [x.userId, bpToPercentText(x.bp)]));
+    const bpList = percentInputsToBp(ids, inputs);
+    expect(bpList).not.toBeNull();
+    const shares = splitPercent(100_000, bpList!);
+    expect(shares.reduce((s, x) => s + x.amount, 0)).toBe(100_000);
+  });
+
+  test("Chia hết và rỗng", () => {
+    expect(splitPercentEqually(["a", "b"]).map((x) => x.bp)).toEqual([5000, 5000]);
+    expect(splitPercentEqually([])).toEqual([]);
+  });
+
+  test("Bảy người: tổng vẫn đúng 100%", () => {
+    const bp = splitPercentEqually(["1", "2", "3", "4", "5", "6", "7"]);
+    expect(bp.reduce((s, x) => s + x.bp, 0)).toBe(FULL_BP);
+    expect(bp[0].bp).toBe(1429);
+    expect(bp[6].bp).toBe(1428);
+  });
+});

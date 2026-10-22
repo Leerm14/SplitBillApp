@@ -1,7 +1,7 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,12 +15,32 @@ import {
   View,
 } from 'react-native';
 
-import { createExpense } from '@/api/expenses';
-import { enqueue } from '@/offline';
-import { fetchGroupMembers } from '@/api/groups';
+import { toUserMessage } from '@/api/errors';
+import type { ExpenseShareInput } from '@/api/expenses';
+import { isActiveMember } from '@/api/groups';
+import { ErrorState } from '@/components/error-state';
 import { formatVND, parseVND } from '@/domain/money';
-import { splitEqual, splitPercent, validateShares } from '@/domain/split';
+import {
+  bpToPercentText,
+  FULL_BP,
+  percentInputsToBp,
+  splitEqual,
+  splitPercent,
+  splitPercentEqually,
+  validateShares,
+} from '@/domain/split';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupAccess } from '@/hooks/use-group-settlement';
+import { submitAction } from '@/offline';
+
+type SplitMode = 'EQUAL' | 'PERCENT' | 'EXACT';
+
+/** APP-09: Phần chia theo phần trăm, kèm percentBp để RPC lưu percent_bp. Ném lỗi nếu ô sai hoặc tổng ≠ 100%. */
+function computePercentShares(totalAmount: number, memberIds: string[], percents: Record<string, string>): ExpenseShareInput[] {
+  const bpList = percentInputsToBp(memberIds, percents);
+  if (!bpList) throw new Error('Phần trăm không hợp lệ (0–100, tối đa 2 chữ số thập phân)');
+  return splitPercent(totalAmount, bpList);
+}
 
 export default function AddExpenseScreen() {
   const { id: groupId } = useLocalSearchParams<{ id: string }>();
@@ -31,73 +51,58 @@ export default function AddExpenseScreen() {
   const [description, setDescription] = useState('');
   const [amountText, setAmountText] = useState('');
   const [note, setNote] = useState('');
-  const [paidBy, setPaidBy] = useState(user?.id || '');
-  const [splitMode, setSplitMode] = useState<'EQUAL' | 'PERCENT' | 'EXACT'>('EQUAL');
-  const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set());
+  // APP-14: null = chưa chọn → mặc định là mình; không setState trong effect
+  const [paidByInput, setPaidBy] = useState<string | null>(null);
+  const [splitMode, setSplitMode] = useState<SplitMode>('EQUAL');
+  // APP-14: null = chưa đụng tới → mặc định chọn tất cả thành viên ACTIVE (tính dẫn xuất)
+  const [selectedInput, setSelectedMembers] = useState<Set<string> | null>(null);
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [percentInputs, setPercentInputs] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
-  // APP-07: Generate idempotency key per form lifecycle, not per submit
+  // APP-07: idempotency key giữ theo form, chỉ đổi khi đã lưu
   const idempotencyKeyRef = useRef(Crypto.randomUUID());
+  // APP-07: chặn bấm hai lần bằng ref đồng bộ
+  const submittingRef = useRef(false);
 
-  const membersQ = useQuery({
-    queryKey: ['group-members', groupId],
-    queryFn: () => fetchGroupMembers(groupId),
-  });
+  // REV-S5: dùng chung query nhóm + thành viên; đã rời nhóm / nhóm đã đóng thì không cho thêm
+  const { membersQ, groupQ, isViewerActive, isGroupClosed, canWrite } = useGroupAccess(groupId);
 
-  // APP-14: Khi có danh sách thành viên, chọn tất cả
-  useEffect(() => {
-    if (membersQ.data && selectedMembers.size === 0) {
-      setSelectedMembers(new Set(membersQ.data.map((m: any) => m.id)));
-      if (!paidBy && membersQ.data.length > 0) {
-        setPaidBy(user?.id || membersQ.data[0].id);
-      }
-    }
-  }, [membersQ.data]);
+  // NEW-03: Chỉ thành viên ACTIVE được chọn làm người trả / người chịu
+  const members = useMemo(() => (membersQ.data ?? []).filter(isActiveMember), [membersQ.data]);
+
+  const selectedMembers = useMemo(
+    () => selectedInput ?? new Set(members.map((m) => m.id)),
+    [selectedInput, members],
+  );
+  const paidBy = paidByInput ?? (members.some((m) => m.id === user?.id) ? user!.id : members[0]?.id ?? '');
 
   const amount = parseVND(amountText) ?? 0;
   const isAmountValid = amount > 0;
+  const selectedIds = useMemo(() => [...selectedMembers], [selectedMembers]);
 
-  // APP-09: Tính phần chia theo phần trăm using splitPercent from domain
-  const computePercentShares = (totalAmount: number, members: string[], percents: Record<string, string>) => {
-    const bpList = members.map((userId) => {
-      const pct = parseFloat(percents[userId] || '0');
-      return { userId, bp: Math.round((isNaN(pct) ? 0 : pct) * 100) }; // convert percent to basis points
-    });
-    return splitPercent(totalAmount, bpList).map((s) => ({
-      userId: s.user_id,
-      amount: s.amount,
-    }));
-  };
+  const bpList = splitMode === 'PERCENT' ? percentInputsToBp(selectedIds, percentInputs) : null;
+  const totalBp = bpList ? bpList.reduce((sum, x) => sum + x.bp, 0) : null;
+  const percentOk = totalBp === FULL_BP;
 
-  // Tính phần chia
-  const shares = useMemo(() => {
-    if (!isAmountValid || selectedMembers.size === 0) return [];
-
-    const memberArr = [...selectedMembers];
-    if (splitMode === 'EQUAL') {
-      return splitEqual(amount, memberArr);
-    }
+  // Tính phần chia (xem trước)
+  const shares = useMemo((): ExpenseShareInput[] => {
+    if (amount <= 0 || selectedIds.length === 0) return [];
+    if (splitMode === 'EQUAL') return splitEqual(amount, selectedIds);
     if (splitMode === 'PERCENT') {
-      return computePercentShares(amount, memberArr, percentInputs);
+      try {
+        return computePercentShares(amount, selectedIds, percentInputs);
+      } catch {
+        return []; // chưa đủ 100% — chưa xem trước được
+      }
     }
     // EXACT: parse từ text
-    return memberArr.map((userId) => ({
+    return selectedIds.map((userId) => ({
       userId,
-      amount: parseVND(customAmounts[userId] || '0') ?? 0,
+      amount: parseVND(customAmounts[userId] || '') ?? 0,
     }));
-  }, [amount, selectedMembers, splitMode, customAmounts, percentInputs]);
+  }, [amount, selectedIds, splitMode, customAmounts, percentInputs]);
 
-  const percentTotal = splitMode === 'PERCENT'
-    ? [...selectedMembers].reduce((s, uid) => {
-        const v = parseFloat(percentInputs[uid] || '0');
-        return s + (isNaN(v) ? 0 : v);
-      }, 0)
-    : 0;
-
-  const customTotal = splitMode === 'EXACT'
-    ? shares.reduce((s, sh) => s + (isNaN(sh.amount) ? 0 : sh.amount), 0)
-    : 0;
+  const customTotal = splitMode === 'EXACT' ? shares.reduce((s, sh) => s + sh.amount, 0) : 0;
 
   const toggleMember = (memberId: string) => {
     const next = new Set(selectedMembers);
@@ -110,11 +115,12 @@ export default function AddExpenseScreen() {
   };
 
   const handleSubmit = async () => {
+    if (submittingRef.current || !user) return;
     if (!isAmountValid) {
       Alert.alert('Lỗi', 'Vui lòng nhập số tiền hợp lệ');
       return;
     }
-    if (selectedMembers.size === 0) {
+    if (selectedIds.length === 0) {
       Alert.alert('Lỗi', 'Vui lòng chọn ít nhất 1 người chịu');
       return;
     }
@@ -122,23 +128,20 @@ export default function AddExpenseScreen() {
       Alert.alert('Lỗi', 'Vui lòng nhập mô tả');
       return;
     }
-
-    let finalShares = shares;
-    if (splitMode === 'EQUAL') {
-      finalShares = splitEqual(amount, [...selectedMembers]);
+    if (!paidBy) {
+      Alert.alert('Lỗi', 'Vui lòng chọn người trả');
+      return;
     }
 
-    if (splitMode === 'PERCENT') {
-      const roundedTotal = Math.round(percentTotal * 100) / 100;
-      if (roundedTotal !== 100) {
-        Alert.alert('Lỗi', `Tổng phần trăm phải bằng 100% (hiện tại: ${roundedTotal}%)`);
-        return;
-      }
-      finalShares = computePercentShares(amount, [...selectedMembers], percentInputs);
-    }
-
+    let finalShares: ExpenseShareInput[];
     try {
-      if (splitMode === 'EXACT') {
+      if (splitMode === 'EQUAL') {
+        finalShares = splitEqual(amount, selectedIds);
+      } else if (splitMode === 'PERCENT') {
+        // APP-09: splitPercent ném lỗi nếu tổng ≠ 100%; gửi kèm percentBp
+        finalShares = computePercentShares(amount, selectedIds, percentInputs);
+      } else {
+        finalShares = shares;
         validateShares(amount, finalShares);
       }
     } catch (err: any) {
@@ -146,46 +149,50 @@ export default function AddExpenseScreen() {
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
-    // APP-07: Use ref-based idempotency key (generated per form lifecycle)
     const currentKey = idempotencyKeyRef.current;
     try {
-      await createExpense({
-        groupId,
-        paidBy,
-        amount,
-        description: description.trim(),
-        shares: finalShares,
-        idempotencyKey: currentKey,
-        splitMethod: splitMode,
-        note: note.trim(),
-      });
-      // APP-07: Reset key after successful submit
+      // APP-08: ghi hàng đợi trước (kèm key), rồi gửi ngay
+      const res = await submitAction(
+        'create_expense',
+        {
+          groupId,
+          paidBy,
+          amount,
+          description: description.trim(),
+          shares: finalShares,
+          idempotencyKey: currentKey,
+          splitMethod: splitMode,
+          note: note.trim(),
+        },
+        currentKey,
+        user.id,
+      );
+      // APP-07: Reset key sau khi đã lưu
       idempotencyKeyRef.current = Crypto.randomUUID();
       queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
       queryClient.invalidateQueries({ queryKey: ['groups'] });
+      if (res.status === 'queued') {
+        Alert.alert('Chưa đồng bộ', 'Chưa gửi được do mất kết nối. Khoản chi đã được lưu và sẽ tự gửi khi có mạng.');
+      }
       router.back();
     } catch (err: any) {
-      // Lỗi mạng → lưu vào hàng đợi offline
-      const msg = String(err.message || '').toLowerCase();
-      if (msg.includes('network') || msg.includes('fetch') || msg.includes('failed to fetch')) {
-        try {
-          await enqueue('create_expense', {
-            groupId, paidBy, amount, description: description.trim(),
-            shares: finalShares, idempotencyKey: currentKey, splitMethod: splitMode, note: note.trim(),
-          }, currentKey);
-          Alert.alert('Đã lưu', 'Thao tác sẽ được đồng bộ khi có mạng.');
-          router.back();
-          return;
-        } catch { /* bỏ qua lỗi enqueue */ }
-      }
-      Alert.alert('Lỗi', err.message || 'Không thể tạo khoản chi');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tạo khoản chi'));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
-  if (membersQ.isLoading) {
+  /** REV-S9: "Chia đều %" — điền phần vạn đều cho người đang chọn, phần dư theo user_id tăng dần */
+  const fillEqualPercent = () => {
+    const next: Record<string, string> = {};
+    for (const x of splitPercentEqually(selectedIds)) next[x.userId] = bpToPercentText(x.bp);
+    setPercentInputs(next);
+  };
+
+  if (membersQ.isLoading || groupQ.isLoading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -193,7 +200,24 @@ export default function AddExpenseScreen() {
     );
   }
 
-  const members = membersQ.data || [];
+  if (membersQ.error && !membersQ.data) {
+    return (
+      <ErrorState
+        message={toUserMessage(membersQ.error, 'Không thể tải danh sách thành viên')}
+        onRetry={() => membersQ.refetch()}
+      />
+    );
+  }
+
+  // REV-S5: chỉ xem
+  if (!canWrite) {
+    return (
+      <ErrorState
+        title={!isViewerActive ? 'Bạn đã rời nhóm' : isGroupClosed ? 'Nhóm đã đóng' : 'Không thể thêm khoản chi'}
+        message="Bạn chỉ xem được dữ liệu của nhóm này, không thể thêm khoản chi mới."
+      />
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -238,7 +262,7 @@ export default function AddExpenseScreen() {
         {/* Người trả */}
         <Text style={styles.label}>Người trả</Text>
         <View style={styles.memberList}>
-          {members.map((m: any) => (
+          {members.map((m) => (
             <Pressable
               key={m.id}
               style={[styles.memberChip, paidBy === m.id && styles.memberChipActive]}
@@ -272,7 +296,7 @@ export default function AddExpenseScreen() {
           ))}
         </View>
 
-        {members.map((m: any) => (
+        {members.map((m) => (
           <View key={m.id} style={styles.shareRow}>
             <Pressable
               style={[styles.checkbox, selectedMembers.has(m.id) && styles.checkboxActive]}
@@ -317,11 +341,19 @@ export default function AddExpenseScreen() {
           </View>
         ))}
 
+        {/* REV-S9: chia đều phần trăm (thirds → 33,34 + 33,33 + 33,33) */}
+        {splitMode === 'PERCENT' && selectedIds.length > 0 && (
+          <Pressable style={styles.equalPercentBtn} onPress={fillEqualPercent}>
+            <Text style={styles.equalPercentText}>Chia đều %</Text>
+          </Pressable>
+        )}
+
         {/* Validation feedback */}
         {splitMode === 'PERCENT' && (
-          <Text style={[styles.customTotal, Math.round(percentTotal * 100) / 100 === 100 ? styles.positive : styles.negative]}>
-            Tổng: {percentTotal.toFixed(1)}% / 100%
-            {Math.round(percentTotal * 100) / 100 !== 100 ? ' ⚠️ Chưa khớp' : ' ✓'}
+          <Text style={[styles.customTotal, percentOk ? styles.positive : styles.negative]}>
+            {totalBp === null
+              ? 'Phần trăm không hợp lệ (0–100, tối đa 2 chữ số thập phân) ⚠️'
+              : `Tổng: ${(totalBp / 100).toFixed(2)}% / 100%${percentOk ? ' ✓' : ' ⚠️ Chưa khớp'}`}
           </Text>
         )}
 
@@ -436,6 +468,15 @@ const styles = StyleSheet.create({
   percentSign: { fontSize: 14, color: '#666' },
   percentPreview: { fontSize: 12, color: '#8E8E93' },
 
+  equalPercentBtn: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  equalPercentText: { fontSize: 13, color: '#007AFF', fontWeight: '600' },
   customTotal: { fontSize: 14, fontWeight: '500', textAlign: 'right' },
   positive: { color: '#34C759' },
   negative: { color: '#FF3B30' },

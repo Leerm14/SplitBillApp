@@ -1,3 +1,4 @@
+import { throwApiError } from '@/api/errors';
 import { supabase } from '@/lib/supabase';
 
 export type Payment = {
@@ -21,7 +22,7 @@ export type Payment = {
 // ============================
 
 export async function fetchPayments(groupId: string): Promise<Payment[]> {
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('payments')
     .select(`
       id, group_id, from_id, to_id, amount, status, note, created_at, decided_at,
@@ -31,7 +32,7 @@ export async function fetchPayments(groupId: string): Promise<Payment[]> {
     .eq('group_id', groupId)
     .order('created_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 
   // Deduplicate — RLS với nhiều SELECT policies có thể trả trùng row qua JOIN
   const seen = new Set<string>();
@@ -50,7 +51,7 @@ export async function createPayment(params: {
   note?: string;
   idempotency_key?: string;
 }): Promise<Payment> {
-  const { data, error } = await supabase.rpc('create_payment', {
+  const { data, error, status } = await supabase.rpc('create_payment', {
     _group_id: params.group_id,
     _to_id: params.to_id,
     _amount: params.amount,
@@ -58,42 +59,42 @@ export async function createPayment(params: {
     _idempotency_key: params.idempotency_key ?? null,
   });
 
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data as Payment;
 }
 
 export async function confirmPayment(paymentId: string): Promise<void> {
-  const { error } = await supabase.rpc('confirm_payment', {
+  const { error, status } = await supabase.rpc('confirm_payment', {
     _payment_id: paymentId,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 }
 
 export async function rejectPayment(paymentId: string, reason?: string): Promise<void> {
-  const { error } = await supabase.rpc('reject_payment', {
+  const { error, status } = await supabase.rpc('reject_payment', {
     _payment_id: paymentId,
     _reason: reason ?? null,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 }
 
 export async function disputePayment(paymentId: string, reason: string): Promise<void> {
-  const { error } = await supabase.rpc('dispute_payment', {
+  const { error, status } = await supabase.rpc('dispute_payment', {
     _payment_id: paymentId,
     _reason: reason,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 }
 
 export async function cancelPayment(paymentId: string): Promise<void> {
-  const { error } = await supabase.rpc('cancel_payment', {
+  const { error, status } = await supabase.rpc('cancel_payment', {
     _payment_id: paymentId,
   });
-  if (error) throw error;
+  if (error) throwApiError(error, status);
 }
 
 export async function fetchPayment(paymentId: string): Promise<Payment> {
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('payments')
     .select(`
       id, group_id, from_id, to_id, amount, status, note, reason, method,
@@ -103,7 +104,7 @@ export async function fetchPayment(paymentId: string): Promise<Payment> {
     `)
     .eq('id', paymentId)
     .single();
-  if (error) throw error;
+  if (error) throwApiError(error, status);
   return data as Payment;
 }
 

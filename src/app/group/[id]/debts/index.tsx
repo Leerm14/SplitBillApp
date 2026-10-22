@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,15 +14,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { fetchExpenses } from '@/api/expenses';
-import { fetchGroup, fetchGroupMembers, updateGroup } from '@/api/groups';
-import { fetchPayments } from '@/api/payments';
+import { toUserMessage } from '@/api/errors';
+import { updateGroup } from '@/api/groups';
+import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
-import { computeBalances, simplifyDebts, type ExpenseInput, type PaymentInput } from '@/domain/settlement';
-import { pairwiseDebts } from '@/domain/pairwise';
+import { describeMyPosition, isSimplifyEnabled } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
-
-type Transfer = { from: string; to: string; amount: number };
+import { useGroupSettlement } from '@/hooks/use-group-settlement';
 
 export default function DebtsOverviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -31,113 +29,36 @@ export default function DebtsOverviewScreen() {
   const queryClient = useQueryClient();
   const [togglingSimplify, setTogglingSimplify] = useState(false);
 
-  const groupQ = useQuery({
-    queryKey: ['group', id],
-    queryFn: () => fetchGroup(id),
-  });
+  // APP-01 / APP-06: số dư + gợi ý dùng chung (suggestTransfers), lỗi không bị nuốt
+  const {
+    groupQ,
+    paymentsQ,
+    expensesQ,
+    getName,
+    settlement,
+    settlementError,
+    myPosition,
+    isUnsynced,
+    isViewerActive,
+    canWrite,
+    isLoading,
+    queryError,
+    refetchAll,
+  } = useGroupSettlement(id);
 
-  const membersQ = useQuery({
-    queryKey: ['group-members', id],
-    queryFn: () => fetchGroupMembers(id),
-  });
-
-  const expensesQ = useQuery({
-    queryKey: ['expenses', id],
-    queryFn: () => fetchExpenses(id),
-  });
-
-  const paymentsQ = useQuery({
-    queryKey: ['payments', id],
-    queryFn: () => fetchPayments(id),
-  });
-
-  const isLoading = groupQ.isLoading || membersQ.isLoading || expensesQ.isLoading || paymentsQ.isLoading;
-
-  const refetchAll = () => {
-    groupQ.refetch();
-    membersQ.refetch();
-    expensesQ.refetch();
-    paymentsQ.refetch();
-  };
-
-  const memberNames = useMemo(() => {
-    if (!membersQ.data) return new Map<string, string>();
-    return new Map(membersQ.data.map((m: any) => [m.id, m.displayName || m.id.slice(0, 8)]));
-  }, [membersQ.data]);
-
-  const getName = (uid: string) => memberNames.get(uid) || uid.slice(0, 8);
-
-  // Chuẩn bị dữ liệu cho tính toán
-  const expenseInputs = useMemo((): ExpenseInput[] => {
-    if (!expensesQ.data) return [];
-    return expensesQ.data.map((e: any) => ({
-      paidBy: e.paid_by,
-      status: e.status,
-      shares: e.expense_shares.map((s: any) => ({
-        userId: s.user_id,
-        amount: Number(s.amount),
-      })),
-    }));
-  }, [expensesQ.data]);
-
-  const paymentInputs = useMemo((): PaymentInput[] => {
-    if (!paymentsQ.data) return [];
-    return paymentsQ.data.map((p: any) => ({
-      fromId: p.from_id,
-      toId: p.to_id,
-      amount: Number(p.amount),
-      status: p.status,
-    }));
-  }, [paymentsQ.data]);
-
-  // Tính số dư chính thức
-  const officialBalances = useMemo(() => {
-    if (!membersQ.data) return null;
-    const memberIds = membersQ.data.map((m: any) => m.id);
-    try {
-      return computeBalances(memberIds, expenseInputs, paymentInputs);
-    } catch {
-      return null;
-    }
-  }, [membersQ.data, expenseInputs, paymentInputs]);
-
-  // Tính gợi ý tất toán
-  const suggestions = useMemo((): Transfer[] => {
-    if (!membersQ.data) return [];
-    const memberIds = membersQ.data.map((m: any) => m.id);
-    const useSimplify = groupQ.data?.simplify_debts !== false;
-
-    try {
-      if (useSimplify) {
-        const projectedBal = computeBalances(memberIds, expenseInputs, paymentInputs, { includePending: true });
-        return simplifyDebts(projectedBal);
-      } else {
-        return pairwiseDebts(memberIds, expenseInputs, paymentInputs, { includePending: true });
-      }
-    } catch {
-      return [];
-    }
-  }, [membersQ.data, expenseInputs, paymentInputs, groupQ.data?.simplify_debts]);
-
-  // Thanh toán đang chờ
-  const pendingPayments = useMemo(() => {
-    if (!paymentsQ.data) return [];
-    return paymentsQ.data.filter((p: any) => p.status === 'PENDING');
-  }, [paymentsQ.data]);
-
-  // Kiểm tra cân bằng
-  const isAllBalanced = useMemo(() => {
-    if (!officialBalances) return false;
-    return [...officialBalances.values()].every((v) => v === 0);
-  }, [officialBalances]);
+  const officialBalances = settlement?.officialBal ?? null;
+  const suggestions = settlement?.suggestions ?? [];
+  const pendingPayments = (paymentsQ.data ?? []).filter((p) => p.status === 'PENDING');
+  const isAllBalanced = !!officialBalances && [...officialBalances.values()].every((v) => v === 0);
 
   const handleToggleSimplify = async (value: boolean) => {
     setTogglingSimplify(true);
     try {
+      // NEW-08: chỉ gửi simplify_debts — các tham số khác NULL = giữ nguyên ở server
       await updateGroup(id, { simplify_debts: value });
       queryClient.invalidateQueries({ queryKey: ['group', id] });
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Không thể thay đổi chế độ');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể thay đổi chế độ'));
     } finally {
       setTogglingSimplify(false);
     }
@@ -151,14 +72,31 @@ export default function DebtsOverviewScreen() {
     );
   }
 
-  const simplifyEnabled = groupQ.data?.simplify_debts !== false;
+  // APP-19: Hiển thị lỗi thay vì dữ liệu trống
+  if (queryError) {
+    return <ErrorState message={toUserMessage(queryError, 'Không thể tải dữ liệu')} onRetry={refetchAll} />;
+  }
+
+  // REV-S5: người đã rời nhóm không xem số dư / gợi ý
+  if (!isViewerActive) {
+    return (
+      <ErrorState
+        title="Bạn đã rời nhóm"
+        message="Số dư và gợi ý tất toán chỉ hiển thị cho thành viên đang ở trong nhóm. Bạn vẫn xem được lịch sử của nhóm."
+      />
+    );
+  }
+
+  // APP-06: NULL được hiểu là bật (BR-09)
+  const simplifyEnabled = isSimplifyEnabled(groupQ.data?.simplify_debts);
+  const isOwner = groupQ.data?.owner_id === user?.id;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView
         refreshControl={
           <RefreshControl
-            refreshing={groupQ.isRefetching || expensesQ.isRefetching}
+            refreshing={groupQ.isRefetching || expensesQ.isRefetching || paymentsQ.isRefetching}
             onRefresh={refetchAll}
           />
         }
@@ -183,15 +121,34 @@ export default function DebtsOverviewScreen() {
             <Switch
               value={simplifyEnabled}
               onValueChange={handleToggleSimplify}
-              disabled={togglingSimplify}
+              disabled={togglingSimplify || !isOwner || !canWrite}
               trackColor={{ false: '#e5e5ea', true: '#34C759' }}
               thumbColor="#fff"
             />
           </View>
         </View>
 
-        {/* Trạng thái cân bằng */}
-        {isAllBalanced && suggestions.length === 0 && pendingPayments.length === 0 ? (
+        {/* REV-S6: tình trạng của chính mình + nhãn "Chưa đồng bộ" khi số dư tự tính ở client */}
+        {!settlementError && myPosition && (
+          <View style={styles.card}>
+            <Text style={styles.myPositionText}>{describeMyPosition(myPosition, formatVND)}</Text>
+            {isUnsynced && (
+              <Text style={styles.unsyncedLabel}>⚠️ Chưa đồng bộ — số dư tính trên dữ liệu đã lưu trên máy</Text>
+            )}
+          </View>
+        )}
+
+        {/* APP-01: lỗi tính công nợ (BR-02) — báo lỗi thay vì hiện "cân bằng" hoặc rỗng */}
+        {settlementError ? (
+          <View style={styles.section}>
+            <ErrorState
+              inline
+              title="Không tính được công nợ"
+              message="Số liệu của nhóm không khớp (tổng số dư khác 0 hoặc thiếu thành viên). Lỗi đã được ghi lại."
+              onRetry={refetchAll}
+            />
+          </View>
+        ) : isAllBalanced && suggestions.length === 0 && pendingPayments.length === 0 ? (
           <View style={styles.settledBox}>
             <Text style={styles.settledIcon}>✅</Text>
             <Text style={styles.settledTitle}>Tất cả đã cân bằng!</Text>
@@ -237,20 +194,8 @@ export default function DebtsOverviewScreen() {
                   <Pressable
                     key={i}
                     style={styles.suggestionRow}
-                    onPress={() => {
-                      // APP-16: Nếu user là 1 trong 2 bên, mở chi tiết đúng
-                      // Nếu user không liên quan, mở pay trực tiếp (hoặc chỉ xem)
-                      if (t.from === user?.id) {
-                        // User nợ → mở chi tiết với người được nợ
-                        router.push(`/group/${id}/debts/${t.to}` as any);
-                      } else if (t.to === user?.id) {
-                        // User được nợ → mở chi tiết với người nợ
-                        router.push(`/group/${id}/debts/${t.from}` as any);
-                      } else {
-                        // Gợi ý giữa 2 người khác → mở chi tiết từ phía người nợ
-                        router.push(`/group/${id}/debts/${t.from}` as any);
-                      }
-                    }}
+                    // APP-16: mở đúng cặp from → to của gợi ý (kể cả giữa hai người khác)
+                    onPress={() => router.push(`/group/${id}/debts/${t.to}?from=${t.from}` as any)}
                   >
                     <View style={styles.suggestionContent}>
                       <Text style={styles.suggestionText}>
@@ -268,7 +213,7 @@ export default function DebtsOverviewScreen() {
             {pendingPayments.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>⏳ Thanh toán đang chờ</Text>
-                {pendingPayments.map((p: any) => (
+                {pendingPayments.map((p) => (
                   <View key={p.id} style={styles.pendingRow}>
                     <View style={styles.pendingInfo}>
                       <Text style={styles.pendingText}>
@@ -312,6 +257,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 16,
   },
+  myPositionText: { fontSize: 16, fontWeight: '600', color: '#1565C0' },
+  unsyncedLabel: { fontSize: 13, color: '#E65100', marginTop: 6 },
   toggleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

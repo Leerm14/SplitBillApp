@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { fetchFriends, fetchPendingRequests, respondFriendRequest } from '@/api/contacts';
 import { useAuth } from '@/hooks/use-auth';
 
@@ -60,7 +61,7 @@ export default function ContactsScreen() {
       queryClient.invalidateQueries({ queryKey: ['pendingRequests'] });
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể xử lý yêu cầu');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể xử lý yêu cầu'));
     },
   });
 

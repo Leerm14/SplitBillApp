@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useState, useCallback } from 'react';
 import {
   ActivityIndicator,
@@ -12,9 +12,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { toUserMessage } from '@/api/errors';
 import { searchUsers, sendFriendRequest } from '@/api/contacts';
 import { fetchProfile } from '@/api/profiles';
-import { useQuery } from '@tanstack/react-query';
 
 type SearchResult = {
   id: string;
@@ -44,7 +44,7 @@ export default function AddFriendScreen() {
       const data = await searchUsers(q);
       setResults(data ?? []);
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Không thể tìm kiếm');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tìm kiếm'));
     } finally {
       setSearching(false);
     }
@@ -58,7 +58,7 @@ export default function AddFriendScreen() {
       Alert.alert('Thành công', 'Đã gửi lời mời kết bạn');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể gửi lời mời');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể gửi lời mời'));
     },
   });
 

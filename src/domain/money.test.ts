@@ -62,4 +62,41 @@ describe("parseVND", () => {
   test("Có khoảng trắng", () => {
     expect(parseVND(" 50 000 ")).toBe(50_000);
   });
+
+  // DOM-03: dấu thập phân và giới hạn số
+  test("Dấu phẩy thập phân → null", () => {
+    expect(parseVND("45,5")).toBeNull();
+    expect(parseVND("45,50")).toBeNull();
+  });
+
+  test("Dấu chấm thập phân → null", () => {
+    expect(parseVND("45.5")).toBeNull();
+    expect(parseVND("100.50")).toBeNull();
+  });
+
+  test("Nhóm cuối không đủ 3 chữ số → null", () => {
+    expect(parseVND("1,000,5")).toBeNull();
+    expect(parseVND("1.000.5")).toBeNull();
+    expect(parseVND("1.0000")).toBeNull();
+  });
+
+  test("Trộn dấu chấm và dấu phẩy → null", () => {
+    expect(parseVND("1.500,000")).toBeNull();
+    expect(parseVND("1,500.000")).toBeNull();
+  });
+
+  test("Số 0 → null", () => {
+    expect(parseVND("0")).toBeNull();
+    expect(parseVND("0.000")).toBeNull();
+  });
+
+  test("MAX_SAFE_INTEGER vẫn hợp lệ", () => {
+    expect(parseVND(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseVND("9.007.199.254.740.991")).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  test("Vượt MAX_SAFE_INTEGER → null", () => {
+    expect(parseVND("9007199254740992")).toBeNull();
+    expect(parseVND("99999999999999999999")).toBeNull();
+  });
 });

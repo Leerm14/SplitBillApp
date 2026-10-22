@@ -19,15 +19,9 @@ import {
   sendFriendRequest,
   unfriend,
 } from '@/api/contacts';
+import { toUserMessage } from '@/api/errors';
 import { fetchUserProfile } from '@/api/profiles';
 import { useAuth } from '@/hooks/use-auth';
-
-type UserProfile = {
-  id: string;
-  display_name: string;
-  user_code: string;
-  avatar_path: string | null;
-};
 
 export default function UserProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -71,12 +65,6 @@ export default function UserProfileScreen() {
     return pendingRequests.some((r: any) => r.requester_id === id);
   }, [pendingRequests, id]);
 
-  // Check if current user sent a request to this user
-  const isSentPending = React.useMemo(() => {
-    if (!friends || !currentUserId) return false;
-    // We need to check all friendships for PENDING status where current user is requester
-    return false; // Will be handled by the button state
-  }, [friends, currentUserId]);
 
   const { data: paymentHandles } = useQuery({
     queryKey: ['paymentHandles', id],
@@ -92,7 +80,7 @@ export default function UserProfileScreen() {
       Alert.alert('Thành công', 'Đã gửi lời mời kết bạn');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể gửi lời mời');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể gửi lời mời'));
     },
   });
 
@@ -104,7 +92,7 @@ export default function UserProfileScreen() {
       Alert.alert('Thành công', 'Đã hủy kết bạn');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể hủy kết bạn');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể hủy kết bạn'));
     },
   });
 

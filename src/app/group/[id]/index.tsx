@@ -1,6 +1,7 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
+import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,27 +15,25 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { cancelExpense, fetchExpenses } from '@/api/expenses';
-import { fetchGroup, fetchGroupMembers } from '@/api/groups';
-import { fetchPayments, confirmPayment, rejectPayment } from '@/api/payments';
+import { toUserMessage } from '@/api/errors';
+import { cancelExpense } from '@/api/expenses';
+import { isActiveMember } from '@/api/groups';
+import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
-import {
-  computeBalances,
-  simplifyDebts,
-  type ExpenseInput,
-  type PaymentInput,
-  type Transfer,
-} from '@/domain/settlement';
+import { describeMyPosition } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupSettlement } from '@/hooks/use-group-settlement';
+import { useGroupUnsyncedItems } from '@/hooks/use-offline-sync';
+import { describeQueueItem, submitAction } from '@/offline';
 
 const AVATAR_COLORS = ['#007AFF', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#FF3B30', '#5856D6'];
 
-type Settlement = {
-  officialBal: Map<string, number>;
-  projectedBal: Map<string, number>;
-  suggestions: Transfer[];
-  pendingPayments: any[];
-  memberNames: Map<string, string>;
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  PENDING: '⏳ Chờ xác nhận',
+  CONFIRMED: '✅ Đã xác nhận',
+  REJECTED: '❌ Từ chối',
+  DISPUTED: '⚠️ Báo sai lệch',
+  CANCELLED: '🚫 Đã hủy',
 };
 
 export default function GroupDetailScreen() {
@@ -44,70 +43,33 @@ export default function GroupDetailScreen() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'debts' | 'expenses' | 'payments'>('debts');
 
-  const groupQ = useQuery({
-    queryKey: ['group', id],
-    queryFn: () => fetchGroup(id),
-  });
+  // APP-01 / APP-06: số dư + gợi ý dùng chung, lỗi tính toán không bị nuốt
+  const {
+    groupQ,
+    membersQ,
+    expensesQ,
+    paymentsQ,
+    getName,
+    settlement,
+    settlementError,
+    myPosition,
+    isUnsynced,
+    isViewerActive,
+    isGroupClosed,
+    canWrite,
+    isLoading,
+    queryError,
+    refetchAll,
+  } = useGroupSettlement(id);
 
-  const membersQ = useQuery({
-    queryKey: ['group-members', id],
-    queryFn: () => fetchGroupMembers(id),
-  });
+  // REV-S10: server từ chối sửa / hủy khoản chi có người đã rời (PARTICIPANT_NOT_ACTIVE)
+  const activeIds = new Set((membersQ.data ?? []).filter(isActiveMember).map((m) => m.id));
+  const allParticipantsActive = (e: { paid_by: string; expense_shares: { user_id: string }[] }) =>
+    activeIds.has(e.paid_by) && e.expense_shares.every((s) => activeIds.has(s.user_id));
 
-  const expensesQ = useQuery({
-    queryKey: ['expenses', id],
-    queryFn: () => fetchExpenses(id),
-  });
-
-  const paymentsQ = useQuery({
-    queryKey: ['payments', id],
-    queryFn: () => fetchPayments(id),
-  });
-
-  const isLoading = groupQ.isLoading || membersQ.isLoading || expensesQ.isLoading || paymentsQ.isLoading;
-
-  const refetchAll = () => {
-    groupQ.refetch();
-    membersQ.refetch();
-    expensesQ.refetch();
-    paymentsQ.refetch();
-  };
-
-  // Tính toán số dư và gợi ý
-  const settlement = useMemo((): Settlement | null => {
-    if (!membersQ.data || !expensesQ.data || !paymentsQ.data) return null;
-
-    const memberIds = membersQ.data.map((m: any) => m.id);
-    const memberNames = new Map(membersQ.data.map((m: any) => [m.id, m.displayName || m.id.slice(0, 8)]));
-
-    const expenses: ExpenseInput[] = expensesQ.data.map((e: any) => ({
-      paidBy: e.paid_by,
-      status: e.status,
-      shares: e.expense_shares.map((s: any) => ({
-        userId: s.user_id,
-        amount: Number(s.amount),
-      })),
-    }));
-
-    const payments: PaymentInput[] = paymentsQ.data.map((p: any) => ({
-      fromId: p.from_id,
-      toId: p.to_id,
-      amount: Number(p.amount),
-      status: p.status,
-    }));
-
-    try {
-      const officialBal = computeBalances(memberIds, expenses, payments);
-      const projectedBal = computeBalances(memberIds, expenses, payments, { includePending: true });
-      const suggestions = simplifyDebts(projectedBal);
-      const pendingPayments = paymentsQ.data.filter((p: any) => p.status === 'PENDING');
-
-      return { officialBal, projectedBal, suggestions, pendingPayments, memberNames };
-    } catch (err) {
-      console.error('Settlement error:', err);
-      return null;
-    }
-  }, [membersQ.data, expensesQ.data, paymentsQ.data]);
+  // APP-08: thao tác của nhóm này còn trong hàng đợi → hiện "Chưa đồng bộ"
+  const unsyncedItems = useGroupUnsyncedItems(id);
+  const pendingPayments = (paymentsQ.data ?? []).filter((p) => p.status === 'PENDING');
 
   const handleShareInvite = async () => {
     if (!groupQ.data) return;
@@ -130,7 +92,7 @@ export default function GroupDetailScreen() {
             queryClient.invalidateQueries({ queryKey: ['expenses', id] });
             queryClient.invalidateQueries({ queryKey: ['groups'] });
           } catch (err: any) {
-            Alert.alert('Lỗi', err.message || 'Không thể hủy');
+            Alert.alert('Lỗi', toUserMessage(err, 'Không thể hủy'));
           }
         },
       },
@@ -148,13 +110,25 @@ export default function GroupDetailScreen() {
           text: accept ? 'Xác nhận' : 'Từ chối',
           style: accept ? 'default' : 'destructive',
           onPress: async () => {
+            if (!user) return;
             try {
-              await (accept ? confirmPayment(paymentId) : rejectPayment(paymentId));
+              // APP-08: ghi hàng đợi trước rồi gửi ngay; mất mạng thì tự gửi lại sau
+              const res = await submitAction(
+                accept ? 'confirm_payment' : 'reject_payment',
+                { paymentId, groupId: id },
+                Crypto.randomUUID(),
+                user.id,
+              );
               queryClient.invalidateQueries({ queryKey: ['payments', id] });
               queryClient.invalidateQueries({ queryKey: ['expenses', id] });
               queryClient.invalidateQueries({ queryKey: ['groups'] });
+              // REV-S11: màn chi tiết thanh toán (nếu đã mở) cũng phải làm mới
+              queryClient.invalidateQueries({ queryKey: ['payment', paymentId] });
+              if (res.status === 'queued') {
+                Alert.alert('Chưa đồng bộ', 'Thao tác đã được lưu và sẽ tự gửi khi có mạng.');
+              }
             } catch (err: any) {
-              Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+              Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
             }
           },
         },
@@ -171,27 +145,18 @@ export default function GroupDetailScreen() {
   }
 
   // APP-19: Hiển thị lỗi thay vì dữ liệu trống
-  const queryError = groupQ.error || membersQ.error || expensesQ.error || paymentsQ.error;
   if (queryError) {
     return (
-      <View style={styles.center}>
-        <Text style={{ fontSize: 16, color: '#FF3B30', textAlign: 'center', marginBottom: 12 }}>
-          ⚠️ Không thể tải dữ liệu nhóm
-        </Text>
-        <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', marginBottom: 16 }}>
-          {(queryError as Error).message || 'Đã xảy ra lỗi'}
-        </Text>
-        <Pressable
-          style={{ backgroundColor: '#007AFF', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 }}
-          onPress={refetchAll}
-        >
-          <Text style={{ color: '#fff', fontWeight: '600' }}>Thử lại</Text>
-        </Pressable>
-      </View>
+      <ErrorState
+        title="Không thể tải dữ liệu nhóm"
+        message={toUserMessage(queryError, 'Đã xảy ra lỗi')}
+        onRetry={refetchAll}
+      />
     );
   }
 
-  const getName = (uid: string) => settlement?.memberNames.get(uid) || uid.slice(0, 8);
+  // NEW-03: Danh sách tính số dư gồm cả người đã rời; phần hiển thị chỉ lấy ACTIVE
+  const activeMembers = (membersQ.data || []).filter(isActiveMember);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -211,9 +176,9 @@ export default function GroupDetailScreen() {
           </Pressable>
 
           {/* Member avatars */}
-          {membersQ.data && membersQ.data.length > 0 && (
+          {activeMembers.length > 0 && (
             <View style={styles.memberAvatars}>
-              {membersQ.data.map((m: any, index: number) => {
+              {activeMembers.map((m, index) => {
                 const name = m.displayName || m.id.slice(0, 8);
                 const letter = name[0].toUpperCase();
                 const color = AVATAR_COLORS[index % AVATAR_COLORS.length];
@@ -230,20 +195,24 @@ export default function GroupDetailScreen() {
                 );
               })}
               <Text style={styles.memberCount}>
-                {membersQ.data.length} thành viên
+                {activeMembers.length} thành viên
               </Text>
             </View>
           )}
 
-          {/* Quick actions */}
+          {/* Quick actions — REV-S5: người đã rời / nhóm đã đóng chỉ xem (Lịch sử vẫn mở được) */}
           <View style={styles.quickActions}>
-            <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/members` as any)}>
-              <Text style={styles.quickActionText}>👤 Thành viên</Text>
-            </Pressable>
-            <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/invite` as any)}>
-              <Text style={styles.quickActionText}>🔗 Mời</Text>
-            </Pressable>
-            {groupQ.data?.owner_id === user?.id && (
+            {isViewerActive && (
+              <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/members` as any)}>
+                <Text style={styles.quickActionText}>👤 Thành viên</Text>
+              </Pressable>
+            )}
+            {canWrite && (
+              <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/invite` as any)}>
+                <Text style={styles.quickActionText}>🔗 Mời</Text>
+              </Pressable>
+            )}
+            {canWrite && groupQ.data?.owner_id === user?.id && (
               <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/edit` as any)}>
                 <Text style={styles.quickActionText}>⚙️ Cài đặt</Text>
               </Pressable>
@@ -254,21 +223,36 @@ export default function GroupDetailScreen() {
           </View>
         </View>
 
-        {/* Action buttons */}
-        <View style={styles.actions}>
-          <Pressable
-            style={styles.actionBtn}
-            onPress={() => router.push(`/group/${id}/add-expense` as any)}
-          >
-            <Text style={styles.actionBtnText}>+ Khoản chi</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.actionBtn, styles.actionBtnGreen]}
-            onPress={() => router.push(`/group/${id}/pay` as any)}
-          >
-            <Text style={styles.actionBtnText}>💸 Thanh toán</Text>
-          </Pressable>
-        </View>
+        {/* REV-S5: trạng thái chỉ xem */}
+        {!isViewerActive ? (
+          <View style={styles.readOnlyBanner}>
+            <Text style={styles.readOnlyTitle}>🚪 Bạn đã rời nhóm</Text>
+            <Text style={styles.readOnlyText}>
+              Bạn chỉ xem được khoản chi, thanh toán và lịch sử của nhóm; không thể thêm hay thay đổi dữ liệu.
+            </Text>
+          </View>
+        ) : isGroupClosed ? (
+          <View style={styles.readOnlyBanner}>
+            <Text style={styles.readOnlyTitle}>🔒 Nhóm đã đóng</Text>
+            <Text style={styles.readOnlyText}>Nhóm đã đóng nên không thể thêm khoản chi hay thanh toán.</Text>
+          </View>
+        ) : (
+          /* Action buttons */
+          <View style={styles.actions}>
+            <Pressable
+              style={styles.actionBtn}
+              onPress={() => router.push(`/group/${id}/add-expense` as any)}
+            >
+              <Text style={styles.actionBtnText}>+ Khoản chi</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionBtn, styles.actionBtnGreen]}
+              onPress={() => router.push(`/group/${id}/pay` as any)}
+            >
+              <Text style={styles.actionBtnText}>💸 Thanh toán</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Tabs */}
         <View style={styles.tabs}>
@@ -285,9 +269,54 @@ export default function GroupDetailScreen() {
           ))}
         </View>
 
-        {/* Tab: Công nợ */}
-        {activeTab === 'debts' && settlement && (
+        {/* APP-08: Thao tác chưa gửi được lên máy chủ */}
+        {unsyncedItems.length > 0 && (
           <View style={styles.section}>
+            {unsyncedItems.map((item) => (
+              <View key={item.id} style={styles.unsyncedRow}>
+                <Text style={styles.unsyncedText}>{describeQueueItem(item)}</Text>
+                <Text style={item.status === 'FAILED' ? styles.unsyncedFailed : styles.unsyncedBadge}>
+                  {item.status === 'FAILED' ? `Lỗi: ${item.error_message ?? ''}` : 'Chưa đồng bộ'}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* APP-01: Lỗi tính công nợ (BR-02) — không hiện gợi ý, không hiện màn rỗng */}
+        {/* REV-S5: người đã rời không xem số dư / gợi ý (số dư của họ luôn 0 theo BR-11) */}
+        {activeTab === 'debts' && !isViewerActive && (
+          <View style={styles.section}>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateIcon}>🚪</Text>
+              <Text style={styles.emptyStateText}>Bạn đã rời nhóm</Text>
+              <Text style={styles.emptyStateHint}>Số dư và gợi ý tất toán chỉ hiển thị cho thành viên đang ở trong nhóm.</Text>
+            </View>
+          </View>
+        )}
+
+        {activeTab === 'debts' && isViewerActive && settlementError && (
+          <View style={styles.section}>
+            <ErrorState
+              inline
+              title="Không tính được công nợ"
+              message="Số liệu của nhóm không khớp (tổng số dư khác 0 hoặc thiếu thành viên). Lỗi đã được ghi lại."
+              onRetry={refetchAll}
+            />
+          </View>
+        )}
+
+        {/* Tab: Công nợ */}
+        {activeTab === 'debts' && isViewerActive && settlement && (
+          <View style={styles.section}>
+            {/* REV-S6: tình trạng của chính mình (AC-01.1, §6 ví dụ 2) */}
+            {myPosition && (
+              <View style={styles.myPositionBox}>
+                <Text style={styles.myPositionText}>{describeMyPosition(myPosition, formatVND)}</Text>
+              </View>
+            )}
+            {/* REV-S6: số tự tính khi không tải được view group_balances */}
+            {isUnsynced && <Text style={styles.unsyncedLabel}>⚠️ Chưa đồng bộ — số dư tính trên dữ liệu đã lưu trên máy</Text>}
             <Text style={styles.sectionTitle}>Số dư chính thức</Text>
             {[...settlement.officialBal.entries()].map(([userId, balance]) => (
               <View key={userId} style={styles.balanceRow}>
@@ -307,7 +336,9 @@ export default function GroupDetailScreen() {
               </View>
             ))}
 
-            <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Gợi ý tất toán</Text>
+            <Text style={[styles.sectionTitle, { marginTop: 20 }]}>
+              {settlement.simplify ? 'Gợi ý tất toán' : 'Gợi ý tất toán (từng cặp)'}
+            </Text>
             {settlement.suggestions.length === 0 ? (
               <View style={styles.settledBox}>
                 <Text style={styles.settledText}>✅ Tất cả đã cân bằng!</Text>
@@ -317,7 +348,8 @@ export default function GroupDetailScreen() {
                 <Pressable
                   key={i}
                   style={styles.suggestionRow}
-                  onPress={() => router.push(`/group/${id}/debts/${t.from === user?.id ? t.to : t.from}` as any)}
+                  // APP-16: mở đúng cặp from → to của gợi ý
+                  onPress={() => router.push(`/group/${id}/debts/${t.to}?from=${t.from}` as any)}
                 >
                   <Text style={styles.suggestionText}>
                     {getName(t.from)} → {getName(t.to)}
@@ -335,17 +367,17 @@ export default function GroupDetailScreen() {
               <Text style={styles.viewAllDebtsText}>Xem tất cả công nợ →</Text>
             </Pressable>
 
-            {settlement.pendingPayments.length > 0 && (
+            {pendingPayments.length > 0 && (
               <>
                 <Text style={[styles.sectionTitle, { marginTop: 20 }]}>⏳ Đang chờ xác nhận</Text>
-                {settlement.pendingPayments.map((p: any) => (
+                {pendingPayments.map((p) => (
                   <View key={p.id} style={styles.pendingRow}>
                     <Text style={styles.pendingText}>
                       {getName(p.from_id)} → {getName(p.to_id)}: {formatVND(Number(p.amount))}
                     </Text>
                     <Text style={styles.pendingStatus}>Chờ {getName(p.to_id)} xác nhận</Text>
-                    {/* Action buttons khi user là người nhận */}
-                    {p.to_id === user?.id && (
+                    {/* Action buttons khi user là người nhận (REV-S5: chỉ khi còn ghi được) */}
+                    {canWrite && p.to_id === user?.id && (
                       <View style={styles.respondActions}>
                         <Pressable
                           style={styles.confirmBtn}
@@ -375,10 +407,10 @@ export default function GroupDetailScreen() {
               <View style={styles.emptyState}>
                 <Text style={styles.emptyStateIcon}>🧾</Text>
                 <Text style={styles.emptyStateText}>Chưa có khoản chi nào</Text>
-                <Text style={styles.emptyStateHint}>Nhấn "+ Khoản chi" để thêm chi phí đầu tiên</Text>
+                <Text style={styles.emptyStateHint}>Nhấn &quot;+ Khoản chi&quot; để thêm chi phí đầu tiên</Text>
               </View>
             ) : (
-              (expensesQ.data || []).map((e: any) => (
+              (expensesQ.data || []).map((e) => (
                 <Pressable
                   key={e.id}
                   style={[styles.expenseCard, e.status === 'CANCELLED' && styles.cancelled]}
@@ -396,14 +428,18 @@ export default function GroupDetailScreen() {
                   </Text>
                   {/* Phần chia */}
                   <View style={styles.sharesContainer}>
-                    {e.expense_shares.map((s: any) => (
+                    {e.expense_shares.map((s) => (
                       <Text key={s.user_id} style={styles.shareItem}>
                         {getName(s.user_id)}: {formatVND(Number(s.amount))}
                       </Text>
                     ))}
                   </View>
                   {/* Nút hủy */}
-                  {e.status === 'ACTIVE' && (e.created_by === user?.id || groupQ.data?.owner_id === user?.id) && (
+                  {/* REV-S5 / REV-S10: không hiện khi chỉ xem hoặc có người tham gia đã rời nhóm */}
+                  {canWrite &&
+                    e.status === 'ACTIVE' &&
+                    allParticipantsActive(e) &&
+                    (e.created_by === user?.id || groupQ.data?.owner_id === user?.id) && (
                     <Pressable
                       style={styles.cancelBtn}
                       onPress={() => handleCancelExpense(e.id)}
@@ -424,10 +460,10 @@ export default function GroupDetailScreen() {
               <View style={styles.emptyState}>
                 <Text style={styles.emptyStateIcon}>💳</Text>
                 <Text style={styles.emptyStateText}>Chưa có thanh toán nào</Text>
-                <Text style={styles.emptyStateHint}>Nhấn "💸 Thanh toán" để gửi thanh toán</Text>
+                <Text style={styles.emptyStateHint}>Nhấn &quot;💸 Thanh toán&quot; để gửi thanh toán</Text>
               </View>
             ) : (
-              (paymentsQ.data || []).map((p: any) => (
+              (paymentsQ.data || []).map((p) => (
                 <View key={p.id} style={styles.paymentCard}>
                   <View style={styles.paymentHeader}>
                     <Text style={styles.paymentText}>
@@ -436,10 +472,9 @@ export default function GroupDetailScreen() {
                     <Text style={styles.paymentAmount}>{formatVND(Number(p.amount))}</Text>
                   </View>
                   <Text style={styles.paymentStatus}>
-                    {p.status === 'PENDING' ? '⏳ Chờ xác nhận' :
-                     p.status === 'CONFIRMED' ? '✅ Đã xác nhận' : '❌ Từ chối'}
+                    {PAYMENT_STATUS_LABEL[p.status] ?? p.status}
                   </Text>
-                  {p.note ? <Text style={styles.paymentNote}>"{p.note}"</Text> : null}
+                  {p.note ? <Text style={styles.paymentNote}>&ldquo;{p.note}&rdquo;</Text> : null}
                   <Text style={styles.paymentDate}>
                     {new Date(p.created_at).toLocaleDateString('vi-VN', {
                       day: '2-digit', month: '2-digit', year: 'numeric',
@@ -448,7 +483,7 @@ export default function GroupDetailScreen() {
                   </Text>
 
                   {/* Nút xác nhận/từ chối cho người nhận */}
-                  {p.status === 'PENDING' && p.to_id === user?.id && (
+                  {canWrite && p.status === 'PENDING' && p.to_id === user?.id && (
                     <View style={styles.respondActions}>
                       <Pressable
                         style={styles.confirmBtn}
@@ -599,4 +634,26 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   viewAllDebtsText: { fontSize: 15, color: '#007AFF', fontWeight: '600' },
+
+  // REV-S5: chỉ xem
+  readOnlyBanner: {
+    margin: 16, padding: 14, borderRadius: 12, gap: 4,
+    backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#D1D1D6',
+  },
+  readOnlyTitle: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
+  readOnlyText: { fontSize: 13, color: '#666' },
+
+  // REV-S6: tình trạng cá nhân + nhãn "Chưa đồng bộ"
+  myPositionBox: { backgroundColor: '#E3F2FD', padding: 14, borderRadius: 10, marginBottom: 8 },
+  myPositionText: { fontSize: 15, fontWeight: '600', color: '#1565C0' },
+  unsyncedLabel: { fontSize: 13, color: '#E65100', marginBottom: 4 },
+
+  // APP-08: Chưa đồng bộ
+  unsyncedRow: {
+    backgroundColor: '#FFF8E1', padding: 12, borderRadius: 10, gap: 2,
+    borderLeftWidth: 4, borderLeftColor: '#FFB300',
+  },
+  unsyncedText: { fontSize: 14, color: '#5D4037', fontWeight: '500' },
+  unsyncedBadge: { fontSize: 12, color: '#E65100' },
+  unsyncedFailed: { fontSize: 12, color: '#C62828' },
 });

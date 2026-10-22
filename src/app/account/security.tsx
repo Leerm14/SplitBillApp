@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 
+import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
 import { deleteAccount } from '@/api/auth';
 
@@ -42,7 +43,7 @@ export default function SecurityScreen() {
       setNewPassword('');
       setConfirmPassword('');
     } catch (err: any) {
-      Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+      Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
     } finally {
       setChangingPassword(false);
     }
@@ -61,7 +62,7 @@ export default function SecurityScreen() {
             try {
               await signOutAll();
             } catch (err: any) {
-              Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+              Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
             }
           },
         },
@@ -72,7 +73,9 @@ export default function SecurityScreen() {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Xóa tài khoản',
-      'Bạn có chắc chắn muốn xóa tài khoản? Hành động này không thể hoàn tác. Tất cả dữ liệu của bạn sẽ bị xóa vĩnh viễn.',
+      // APP-21: theo spec — tài khoản được ẩn danh, lịch sử nhóm vẫn giữ để số dư của người khác đúng
+      'Bạn có chắc chắn muốn xóa tài khoản? Bạn sẽ không đăng nhập được nữa và hồ sơ (tên, ảnh, mã người dùng) sẽ được ẩn danh. ' +
+        'Các khoản chi và thanh toán đã ghi trong nhóm vẫn được giữ, hiển thị dưới tên ẩn danh. Hành động này không thể hoàn tác.',
       [
         { text: 'Hủy', style: 'cancel' },
         {
@@ -84,14 +87,17 @@ export default function SecurityScreen() {
               // APP-13: Use API layer instead of direct supabase calls
               await deleteAccount();
 
-              Alert.alert('Đã xóa', 'Tài khoản đã được xóa thành công.', [
+              Alert.alert('Đã xóa', 'Tài khoản đã được xóa và ẩn danh. Lịch sử trong nhóm vẫn được giữ.', [
                 {
                   text: 'OK',
-                  onPress: () => signOut(),
+                  // REV-A10: đăng xuất lỗi (mất mạng…) phải báo người dùng, không nuốt lỗi
+                  onPress: () => {
+                    signOut().catch((e) => Alert.alert('Lỗi', toUserMessage(e, 'Không thể đăng xuất')));
+                  },
                 },
               ]);
             } catch (err: any) {
-              Alert.alert('Lỗi', err.message || 'Có lỗi xảy ra');
+              Alert.alert('Lỗi', toUserMessage(err, 'Có lỗi xảy ra'));
             } finally {
               setDeletingAccount(false);
             }
@@ -154,7 +160,7 @@ export default function SecurityScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Xóa tài khoản</Text>
         <Text style={styles.sectionDescription}>
-          Xóa vĩnh viễn tài khoản và tất cả dữ liệu liên quan. Hành động này không thể hoàn tác.
+          Xóa tài khoản và ẩn danh hồ sơ của bạn. Khoản chi, thanh toán đã ghi trong nhóm vẫn được giữ dưới tên ẩn danh để công nợ của người khác không bị sai. Hành động này không thể hoàn tác.
         </Text>
         <Pressable
           style={[styles.destructiveButton, deletingAccount && styles.buttonDisabled]}

@@ -4,6 +4,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import { defaultShouldDehydrateQuery, type Query } from '@tanstack/react-query';
 
 const STORAGE_KEY = 'SPLITBILL_QUERY_CACHE';
 
@@ -30,7 +31,12 @@ export const asyncStoragePersister = createAsyncStoragePersister({
 export const persistOptions = {
   persister: asyncStoragePersister,
   maxAge: 1000 * 60 * 60 * 24, // 24 hours
-  buster: '1.0.0', // Increment on breaking cache changes
+  buster: '1.1.0', // Increment on breaking cache changes (1.1.0: kiểu dữ liệu API mới — APP-18)
+  dehydrateOptions: {
+    // APP-08: Danh sách hàng đợi offline đọc từ SQLite — không lưu vào cache
+    shouldDehydrateQuery: (query: Query) =>
+      query.queryKey[0] !== 'offline-queue' && defaultShouldDehydrateQuery(query),
+  },
 };
 
 // APP-02: Clear persisted cache on sign out

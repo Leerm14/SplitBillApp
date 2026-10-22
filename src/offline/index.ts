@@ -1,16 +1,21 @@
 export {
-  enqueue,
-  getPendingItems,
-  getPendingCount,
-  markSynced,
-  markFailed,
-  retryItem,
-  getAllItems,
-  cleanupOldItems,
   clearQueue,
-  getFailedItems,
+  discardItem,
+  enqueue,
+  getPendingCount,
   getQueueItem,
-  updateItem,
+  getUnsyncedItems,
+  onQueueChange,
+  retryItem,
+  type QueueItem,
+  type QueueItemStatus,
 } from './queue';
-export { processQueue } from './sync';
-
+export {
+  describeQueueItem,
+  processQueue,
+  queueItemGroupId,
+  submitAction,
+  type ProcessResult,
+  type QueueAction,
+  type SubmitResult,
+} from './sync';

@@ -1,31 +1,69 @@
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
-import { Slot, useRouter, useSegments } from 'expo-router';
+import { Stack, usePathname, useRouter, useSegments } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
 import { useNotifications } from '@/hooks/use-notifications';
 import { useOfflineSync } from '@/hooks/use-offline-sync';
-import { SyncStatusBar } from '@/components/sync-status-bar';
+import { SyncStatusBar, isSyncStatusBarVisible } from '@/components/sync-status-bar';
+import { onPendingLinkChange, peekPendingLink, setPendingLink, takePendingLink } from '@/lib/pending-link';
 import { persistOptions, queryClientConfig } from '@/lib/query-persister';
+import { describeQueueItem } from '@/offline/sync';
 
 SplashScreen.preventAutoHideAsync();
 
 // APP-12: Use centralized queryClientConfig with proper gcTime
 const queryClient = new QueryClient(queryClientConfig);
 
+/** APP-11: Đường dẫn trong app cần giữ lại qua bước đăng nhập (liên kết mời). */
+function joinPathFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  const parsed = Linking.parse(url);
+  const path = (parsed.path ?? '').replace(/^\/+/, '');
+  if (!path.startsWith('join/')) return null;
+  const token = path.split('/')[1] || (typeof parsed.queryParams?.token === 'string' ? parsed.queryParams.token : '');
+  return token ? `/join/${token}` : null;
+}
+
 /** Chuyển hướng dựa trên trạng thái đăng nhập */
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth();
   const segments = useSegments();
+  const pathname = usePathname();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
-  // APP-11: Save deep link path when not logged in
-  const [pendingDeepLink, setPendingDeepLink] = useState<string | null>(null);
+  const sessionRef = useRef(session);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  // REV-A8: đích mới được lưu (ví dụ thông báo cold start) → chạy lại hiệu ứng điều hướng
+  const [pendingVersion, setPendingVersion] = useState(0);
+  useEffect(() => onPendingLinkChange(() => setPendingVersion((v) => v + 1)), []);
+
+  // APP-11: Mở app từ liên kết khi app đang tắt (cold start)
+  useEffect(() => {
+    Linking.getInitialURL()
+      .then((url) => {
+        const path = joinPathFromUrl(url);
+        if (path && !sessionRef.current) setPendingLink(path);
+      })
+      .catch(() => {});
+
+    // Liên kết tới khi app đang chạy: expo-router tự điều hướng; chỉ cần nhớ nếu chưa đăng nhập
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      const path = joinPathFromUrl(url);
+      if (path && !sessionRef.current) setPendingLink(path);
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (loading) return;
@@ -36,50 +74,26 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!session && !inAuthGroup) {
-      // Chưa đăng nhập → chuyển sang sign-in
+      // APP-11: Đang ở màn join/[token] mà chưa đăng nhập → nhớ đường dẫn
+      if (pathname.startsWith('/join/')) setPendingLink(pathname);
+      // REV-A5: Stack.Protected đã gỡ các màn cần đăng nhập khỏi ngăn xếp; replace để chắc chắn tới sign-in
       router.replace('/(auth)/sign-in' as any);
     } else if (session && inAuthGroup) {
-      // Đã đăng nhập → chuyển sang tabs
-      router.replace('/(tabs)' as any);
+      // Đã đăng nhập → về liên kết đang chờ (nếu có), ngược lại về tabs
+      const target = takePendingLink();
+      router.replace((target ?? '/(tabs)') as any);
+    } else if (session && peekPendingLink()) {
+      const target = takePendingLink();
+      if (target && target !== pathname) router.push(target as any);
     }
-  }, [session, loading, segments]);
-
-  // APP-11: Handle deep links — save path when not logged in
-  useEffect(() => {
-    const handleUrl = ({ url }: { url: string }) => {
-      const parsed = Linking.parse(url);
-      if (parsed.path?.startsWith('join/')) {
-        const token = parsed.queryParams?.token ?? parsed.path.split('/')[1] ?? '';
-        if (session) {
-          router.push(`/join/${token}` as any);
-        } else {
-          // APP-11: Save path for after login
-          setPendingDeepLink(`/join/${token}`);
-        }
-      }
-    };
-
-    const subscription = Linking.addEventListener('url', handleUrl);
-    return () => subscription.remove();
-  }, [session]);
-
-  // APP-11: Navigate to saved deep link after login
-  useEffect(() => {
-    if (session && pendingDeepLink) {
-      router.push(pendingDeepLink as any);
-      setPendingDeepLink(null);
-    }
-  }, [session, pendingDeepLink]);
+  }, [session, loading, segments, pathname, router, pendingVersion]);
 
   // Đăng ký push notification khi đã đăng nhập
-  try {
-    useNotifications();
-  } catch (e) {
-    console.warn('useNotifications error:', e);
-  }
+  useNotifications();
 
   // Đồng bộ hàng đợi offline
-  const { pendingCount, lastSyncAt, isSyncing, sync } = useOfflineSync();
+  const { pendingCount, pendingItems, failedItems, lastSyncAt, isSyncing, isOnline, sync, retry, discard } =
+    useOfflineSync();
 
   if (loading) {
     // Hiển thị loading indicator thay vì blank screen
@@ -91,31 +105,80 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const showBar = !!session && isSyncStatusBarVisible({ pendingCount, failedCount: failedItems.length, isOnline });
+
   return (
-    <>
-      <SyncStatusBar
-        pendingCount={pendingCount}
-        lastSyncAt={lastSyncAt}
-        isSyncing={isSyncing}
-        onSyncPress={sync}
-      />
-      {children}
-    </>
+    <View style={styles.root}>
+      {showBar && (
+        // REV-A6: thanh nằm dưới thanh trạng thái hệ thống — tự đệm phần tai thỏ / status bar
+        <View style={{ paddingTop: insets.top, backgroundColor: '#FFF8E1' }}>
+          <SyncStatusBar
+            pendingCount={pendingCount}
+            pendingItems={pendingItems}
+            failedItems={failedItems}
+            lastSyncAt={lastSyncAt}
+            isSyncing={isSyncing}
+            isOnline={isOnline}
+            onSyncPress={sync}
+            onRetry={retry}
+            onDiscard={discard}
+            describeItem={describeQueueItem}
+          />
+        </View>
+      )}
+      {/* REV-A6: SafeAreaProvider lồng đo lại inset theo vị trí thật của vùng màn hình:
+          khi thanh đồng bộ đã chiếm phần trên, header của các màn không đệm thêm lần nữa. */}
+      <SafeAreaProvider style={styles.root}>{children}</SafeAreaProvider>
+    </View>
+  );
+}
+
+/** REV-A5: Ngăn xếp gốc — màn cần đăng nhập nằm trong Stack.Protected nên đăng xuất sẽ dọn sạch ngăn xếp. */
+function RootStack() {
+  const { session } = useAuth();
+  const signedIn = !!session;
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        headerBackTitle: 'Quay lại',
+        headerStyle: { backgroundColor: '#fff' },
+        headerTitleStyle: { fontWeight: '600' },
+        headerTintColor: '#007AFF',
+      }}
+    >
+      <Stack.Protected guard={signedIn} redirectTo="/(auth)/sign-in">
+        {/* APP-19: Stack thay cho Slot để các màn con có nút quay lại */}
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="group" />
+        <Stack.Screen name="payment" />
+        <Stack.Screen name="account" />
+        <Stack.Screen name="contacts" />
+        <Stack.Screen name="user" />
+        <Stack.Screen name="join" />
+        <Stack.Screen name="notifications" />
+        <Stack.Screen name="history" options={{ headerShown: true, title: 'Lịch sử' }} />
+      </Stack.Protected>
+      <Stack.Protected guard={!signedIn}>
+        <Stack.Screen name="(auth)" />
+      </Stack.Protected>
+    </Stack>
   );
 }
 
 export default function RootLayout() {
   return (
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={persistOptions}
-    >
+    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <AuthProvider>
         <AuthGate>
           <StatusBar style="dark" />
-          <Slot />
+          <RootStack />
         </AuthGate>
       </AuthProvider>
     </PersistQueryClientProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+});

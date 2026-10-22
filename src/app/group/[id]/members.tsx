@@ -16,10 +16,12 @@ import {
   closeGroup,
   fetchGroup,
   fetchGroupMembers,
+  isActiveMember,
   leaveGroup,
   removeMember,
   transferOwnership,
 } from '@/api/groups';
+import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
 
 const AVATAR_COLORS = ['#007AFF', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#FF3B30', '#5856D6'];
@@ -51,7 +53,7 @@ export default function MembersScreen() {
       Alert.alert('Thành công', 'Đã chuyển quyền chủ nhóm');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể chuyển quyền');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể chuyển quyền'));
     },
   });
 
@@ -63,7 +65,7 @@ export default function MembersScreen() {
       Alert.alert('Thành công', 'Đã xóa thành viên khỏi nhóm');
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể xóa thành viên');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể xóa thành viên'));
     },
   });
 
@@ -74,18 +76,20 @@ export default function MembersScreen() {
       router.replace('/(tabs)/groups' as any);
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể rời nhóm');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể rời nhóm'));
     },
   });
 
   const closeMutation = useMutation({
     mutationFn: () => closeGroup(id),
     onSuccess: () => {
+      // REV-S11: trạng thái CLOSED của nhóm phải hiện ngay ở màn nhóm và danh sách nhóm
+      queryClient.invalidateQueries({ queryKey: ['group', id] });
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       router.replace('/(tabs)/groups' as any);
     },
     onError: (err: any) => {
-      Alert.alert('Lỗi', err.message || 'Không thể đóng nhóm');
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể đóng nhóm'));
     },
   });
 
@@ -168,7 +172,8 @@ export default function MembersScreen() {
         {/* Member list */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Danh sách thành viên</Text>
-          {(membersQ.data || []).map((member: any, index: number) => {
+          {/* NEW-03: Người đã rời / bị xóa không còn là thành viên */}
+          {(membersQ.data || []).filter(isActiveMember).map((member: any, index: number) => {
             const name = member.displayName || member.id.slice(0, 8);
             const letter = name[0].toUpperCase();
             const color = AVATAR_COLORS[index % AVATAR_COLORS.length];

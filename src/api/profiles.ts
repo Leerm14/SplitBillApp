@@ -1,3 +1,4 @@
+import { throwApiError } from '@/api/errors';
 import { supabase } from '@/lib/supabase';
 
 // ============================
@@ -21,44 +22,58 @@ async function getUserId(): Promise<string> {
   return user.id;
 }
 
-export async function fetchProfile(): Promise<Profile> {
-  const userId = await getUserId();
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
+/** Thông tin người khác được xem (SEC-04): chỉ 4 cột công khai. */
+export type PublicProfile = Pick<Profile, 'id' | 'display_name' | 'user_code' | 'avatar_path'>;
 
-  if (error) throw error;
-  return data;
+// NEW-01: Bảng profiles chỉ cho đọc 4 cột công khai; hồ sơ đầy đủ của mình đọc qua RPC
+export async function fetchProfile(): Promise<Profile> {
+  const { data, error, status } = await supabase.rpc('get_my_profile');
+
+  if (error) throwApiError(error, status);
+  return (Array.isArray(data) ? data[0] : data) as Profile;
 }
 
 // APP-13: Fetch another user's profile by ID
-export async function fetchUserProfile(userId: string): Promise<Profile> {
-  const { data, error } = await supabase
+export async function fetchUserProfile(userId: string): Promise<PublicProfile> {
+  const { data, error, status } = await supabase
     .from('profiles')
-    .select('id, display_name, user_code, avatar_path, searchable, created_at')
+    .select('id, display_name, user_code, avatar_path')
     .eq('id', userId)
     .single();
 
-  if (error) throw error;
-  return data;
+  if (error) throwApiError(error, status);
+  return data as PublicProfile;
+}
+
+/**
+ * NEW-02: Cập nhật hồ sơ qua RPC update_profile (bảng profiles không cho UPDATE trực tiếp,
+ * chỉ SELECT được 4 cột công khai). Tham số NULL = giữ nguyên.
+ */
+async function callUpdateProfile(args: {
+  displayName?: string | null;
+  avatarPath?: string | null;
+  searchable?: boolean | null;
+  clearAvatar?: boolean;
+}): Promise<Profile> {
+  const { data, error, status } = await supabase.rpc('update_profile', {
+    _display_name: args.displayName ?? null,
+    _avatar_path: args.avatarPath ?? null,
+    _searchable: args.searchable ?? null,
+    _clear_avatar: args.clearAvatar ?? false,
+  });
+  if (error) throwApiError(error, status);
+  // RPC trả về dòng profile (có thể bọc trong mảng tùy cách khai báo RETURNS)
+  return (Array.isArray(data) ? data[0] : data) as Profile;
 }
 
 export async function updateProfile(updates: {
   display_name?: string;
   searchable?: boolean;
 }): Promise<Profile> {
-  const userId = await getUserId();
-  const { data, error } = await supabase
-    .from('profiles')
-    .update(updates)
-    .eq('id', userId)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+  return callUpdateProfile({
+    displayName: updates.display_name,
+    searchable: updates.searchable,
+  });
 }
 
 export async function uploadAvatar(uri: string): Promise<string> {
@@ -78,15 +93,10 @@ export async function uploadAvatar(uri: string): Promise<string> {
       contentType: 'image/jpeg',
     });
 
-  if (uploadError) throw uploadError;
+  if (uploadError) throwApiError(uploadError);
 
-  // Update avatar_path in profiles
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update({ avatar_path: filePath })
-    .eq('id', userId);
-
-  if (updateError) throw updateError;
+  // NEW-02: Lưu avatar_path qua RPC
+  await callUpdateProfile({ avatarPath: filePath });
 
   // Return public URL
   return getAvatarUrl(filePath);
@@ -101,15 +111,10 @@ export async function deleteAvatar(): Promise<void> {
     .from('avatars')
     .remove([filePath]);
 
-  if (removeError) throw removeError;
+  if (removeError) throwApiError(removeError);
 
-  // Set avatar_path to null in profiles
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update({ avatar_path: null })
-    .eq('id', userId);
-
-  if (updateError) throw updateError;
+  // NEW-02: Xóa avatar_path qua RPC (_clear_avatar)
+  await callUpdateProfile({ clearAvatar: true });
 }
 
 export function getAvatarUrl(avatarPath: string): string {
