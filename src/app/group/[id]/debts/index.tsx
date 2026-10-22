@@ -19,6 +19,7 @@ import { updateGroup } from '@/api/groups';
 import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
 import { describeMyPosition, isSimplifyEnabled } from '@/domain/suggest';
+import { RecipientPaymentHandles } from '@/components/payment-handles';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupSettlement } from '@/hooks/use-group-settlement';
 
@@ -191,20 +192,25 @@ export default function DebtsOverviewScreen() {
                 </View>
               ) : (
                 suggestions.map((t, i) => (
-                  <Pressable
-                    key={i}
-                    style={styles.suggestionRow}
-                    // APP-16: mở đúng cặp from → to của gợi ý (kể cả giữa hai người khác)
-                    onPress={() => router.push(`/group/${id}/debts/${t.to}?from=${t.from}` as any)}
-                  >
-                    <View style={styles.suggestionContent}>
-                      <Text style={styles.suggestionText}>
-                        {getName(t.from)} → {getName(t.to)}
-                      </Text>
-                      <Text style={styles.suggestionAmount}>{formatVND(t.amount)}</Text>
-                    </View>
-                    <Text style={styles.chevron}>›</Text>
-                  </Pressable>
+                  <View key={i} style={styles.suggestionRow}>
+                    <Pressable
+                      style={styles.suggestionMain}
+                      // APP-16: mở đúng cặp from → to của gợi ý (kể cả giữa hai người khác)
+                      onPress={() => router.push(`/group/${id}/debts/${t.to}?from=${t.from}` as any)}
+                    >
+                      <View style={styles.suggestionContent}>
+                        <Text style={styles.suggestionText}>
+                          {getName(t.from)} → {getName(t.to)}
+                        </Text>
+                        <Text style={styles.suggestionAmount}>{formatVND(t.amount)}</Text>
+                      </View>
+                      <Text style={styles.chevron}>›</Text>
+                    </Pressable>
+                    {/* MVP-07: mình là người trả → hiện phương thức thanh toán của người nhận */}
+                    {t.from === user?.id && (
+                      <RecipientPaymentHandles userId={t.to} name={getName(t.to)} />
+                    )}
+                  </View>
                 ))
               )}
             </View>
@@ -296,15 +302,14 @@ const styles = StyleSheet.create({
   negative: { color: '#FF3B30' },
 
   suggestionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 8,
     backgroundColor: '#FFF8E1',
     padding: 14,
     borderRadius: 10,
     borderLeftWidth: 4,
     borderLeftColor: '#FFB300',
   },
+  suggestionMain: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   suggestionContent: {
     flex: 1,
     flexDirection: 'row',

@@ -1,9 +1,49 @@
 import { throwApiError } from '@/api/errors';
+import { compressImage } from '@/lib/image-compress';
+import { readFileBytes } from '@/lib/receipt-files';
 import { supabase } from '@/lib/supabase';
 
 // ============================
-// Expenses API
+// Ảnh hóa đơn (MVP-01, phương án A: Supabase Storage bucket riêng tư `receipts`)
 // ============================
+
+const RECEIPT_BUCKET = 'receipts';
+/** Signed URL ngắn hạn — chỉ thành viên nhóm lấy được (policy can_read_receipt). */
+export const RECEIPT_URL_TTL_SECONDS = 300;
+
+/** Nén ảnh hóa đơn (cạnh dài ≤ 1600 px, JPEG 0,7). Trả uri file đã nén (thư mục cache). */
+export async function compressReceipt(uri: string): Promise<string> {
+  return (await compressImage(uri)).uri;
+}
+
+/**
+ * MVP-01 / L7: Upload ảnh (đã nén) tới đúng `receiptPath` (`<groupId>/<uuid>/<uuid>.jpg`, tạo một lần
+ * cho mỗi form). upsert = true để lần thử lại ghi đè cùng đường dẫn thay vì tạo ảnh mồ côi.
+ * L8: đọc byte bằng expo-file-system (File.bytes()) thay vì fetch → Blob → Response.arrayBuffer().
+ */
+export async function uploadReceiptFile(receiptPath: string, localUri: string): Promise<string> {
+  const bytes = await readFileBytes(localUri);
+  const { error } = await supabase.storage.from(RECEIPT_BUCKET).upload(receiptPath, bytes, {
+    contentType: 'image/jpeg',
+    upsert: true,
+  });
+  if (error) {
+    const e = error as { message?: string; status?: unknown; statusCode?: unknown };
+    const status = typeof e.status === 'number' ? e.status : Number(e.statusCode) || null;
+    throwApiError({ message: e.message || 'Không upload được ảnh hóa đơn' }, status);
+  }
+  return receiptPath;
+}
+
+/** MVP-01: Signed URL có hạn cho ảnh hóa đơn (bucket riêng tư). */
+export async function getReceiptUrl(receiptPath: string, expiresIn = RECEIPT_URL_TTL_SECONDS): Promise<string> {
+  const { data, error } = await supabase.storage.from(RECEIPT_BUCKET).createSignedUrl(receiptPath, expiresIn);
+  if (error || !data?.signedUrl) {
+    const e = (error ?? {}) as { message?: string; status?: unknown };
+    throwApiError({ message: e.message || 'Không lấy được ảnh hóa đơn' }, typeof e.status === 'number' ? e.status : null);
+  }
+  return data.signedUrl;
+}
 
 // APP-18: Typed interfaces for API responses
 export type ExpenseShare = {
@@ -97,6 +137,7 @@ export async function createExpense(params: {
   idempotencyKey: string;
   splitMethod?: string;
   note?: string;
+  receiptPath?: string;
 }) {
   const { data, error, status } = await supabase.rpc('create_expense', {
     _group_id: params.groupId,
@@ -107,6 +148,7 @@ export async function createExpense(params: {
     _idempotency_key: params.idempotencyKey,
     _split_method: params.splitMethod ?? 'EQUAL',
     _note: params.note ?? '',
+    _receipt_path: params.receiptPath ?? null,
   });
   if (error) throwApiError(error, status);
   return data;
@@ -121,7 +163,11 @@ export async function updateExpense(params: {
   splitMethod: string;
   note: string;
   shares: ExpenseShareInput[];
-  receiptPath?: string;
+  /**
+   * MVP-01: update_expense GHI ĐÈ receipt_path bằng giá trị này — bắt buộc truyền rõ:
+   * đường dẫn hiện có để giữ, đường dẫn mới để thay, null để xóa ảnh.
+   */
+  receiptPath: string | null;
 }) {
   const { data, error, status } = await supabase.rpc('update_expense', {
     _expense_id: params.expenseId,
@@ -132,7 +178,7 @@ export async function updateExpense(params: {
     _split_method: params.splitMethod,
     _note: params.note,
     _shares: params.shares,
-    _receipt_path: params.receiptPath ?? null,
+    _receipt_path: params.receiptPath,
   });
   if (error) throwApiError(error, status);
   return data;

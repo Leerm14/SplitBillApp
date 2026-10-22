@@ -117,10 +117,10 @@ SELECT is(
     ORDER BY 1
   ),
   ARRAY[
-    'accept_invite', 'can_read_receipt', 'can_view_profile', 'can_write_receipt',
+    'accept_invite', 'accept_invite_by_id', 'can_read_receipt', 'can_view_profile', 'can_write_receipt',
     'cancel_expense', 'cancel_payment', 'close_group', 'confirm_payment',
     'create_expense', 'create_group', 'create_invite', 'create_payment',
-    'dispute_payment', 'get_my_profile', 'is_member', 'is_member_or_was_member',
+    'dispute_payment', 'find_user_by_code', 'get_my_profile', 'is_member', 'is_member_or_was_member',
     'is_owner', 'join_group', 'leave_group',
     'register_push_token', 'reject_payment', 'remove_member',
     'respond_friend_request', 'respond_payment', 'revoke_invite', 'rotate_invite_code',

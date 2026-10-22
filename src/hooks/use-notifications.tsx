@@ -36,6 +36,8 @@ if (Notifications) {
 
 /** APP-10: Đường dẫn trong app từ dữ liệu của thông báo (null nếu không có đích). */
 function pathFromNotificationData(data: any): string | null {
+  // MVP-06: lời mời đích danh — người nhận chưa là thành viên, mở màn Thông báo để xác nhận tham gia
+  if (data?.type === 'GROUP_INVITED') return '/notifications';
   if (data?.expense_id && data?.group_id) return `/group/${data.group_id}/expense/${data.expense_id}`;
   if (data?.payment_id) return `/payment/${data.payment_id}`;
   if (data?.group_id) return `/group/${data.group_id}`;

@@ -8,6 +8,8 @@
 
 import * as SQLite from 'expo-sqlite';
 
+import { clearLocalReceipts, deleteLocalReceipt } from '@/lib/receipt-files';
+
 export type QueueItemStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 
 export interface QueueItem {
@@ -164,8 +166,24 @@ export async function retryItem(id: number): Promise<void> {
 /** APP-08: Người dùng bỏ một thao tác chưa đồng bộ / bị lỗi. */
 export async function discardItem(id: number): Promise<void> {
   const database = await getDb();
+  const row = await database.getFirstAsync<{ payload: string }>(
+    "SELECT payload FROM queue WHERE id = ? AND status <> 'SYNCED'",
+    [id],
+  );
   await database.runAsync("DELETE FROM queue WHERE id = ? AND status <> 'SYNCED'", [id]);
+  // MVP-01: bỏ thao tác thì xóa luôn ảnh hóa đơn tạm đi kèm
+  if (row) deleteLocalReceipt(localReceiptUriOf(row.payload));
   emitChange();
+}
+
+/** MVP-01: uri ảnh hóa đơn tạm trong payload create_expense (nếu có). */
+function localReceiptUriOf(payload: string): string | null {
+  try {
+    const p = JSON.parse(payload);
+    return typeof p?.localReceiptUri === 'string' ? p.localReceiptUri : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -177,10 +195,15 @@ export async function discardForeignItems(userId: string): Promise<number> {
   const database = await getDb();
   const claimed = await database.runAsync("UPDATE queue SET user_id = ? WHERE user_id IS NULL", [userId]);
   if (claimed.changes > 0) emitChange();
+  const foreign = await database.getAllAsync<{ payload: string }>(
+    "SELECT payload FROM queue WHERE status <> 'SYNCED' AND user_id <> ?",
+    [userId],
+  );
   const result = await database.runAsync(
     "DELETE FROM queue WHERE status <> 'SYNCED' AND user_id <> ?",
     [userId],
   );
+  for (const row of foreign) deleteLocalReceipt(localReceiptUriOf(row.payload));
   if (result.changes > 0) {
     console.warn(`[Queue] Đã bỏ ${result.changes} thao tác không thuộc tài khoản hiện tại`);
     emitChange();
@@ -209,6 +232,8 @@ export async function clearQueue(): Promise<void> {
   generation++;
   const database = await getDb();
   await database.runAsync('DELETE FROM queue');
+  // MVP-01: ảnh hóa đơn đang chờ upload của tài khoản vừa đăng xuất
+  clearLocalReceipts();
   emitChange();
 }
 

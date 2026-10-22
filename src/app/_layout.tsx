@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from '@/hooks/use-auth';
 import { useNotifications } from '@/hooks/use-notifications';
 import { useOfflineSync } from '@/hooks/use-offline-sync';
 import { SyncStatusBar, isSyncStatusBarVisible } from '@/components/sync-status-bar';
+import { resumableRoute } from '@/lib/app-links';
 import { onPendingLinkChange, peekPendingLink, setPendingLink, takePendingLink } from '@/lib/pending-link';
 import { persistOptions, queryClientConfig } from '@/lib/query-persister';
 import { describeQueueItem } from '@/offline/sync';
@@ -21,14 +22,19 @@ SplashScreen.preventAutoHideAsync();
 // APP-12: Use centralized queryClientConfig with proper gcTime
 const queryClient = new QueryClient(queryClientConfig);
 
-/** APP-11: Đường dẫn trong app cần giữ lại qua bước đăng nhập (liên kết mời). */
-function joinPathFromUrl(url: string | null): string | null {
+/**
+ * APP-11 / MVP-04 / MVP-05: Đường dẫn trong app cần giữ lại qua bước đăng nhập
+ * (liên kết mời join/<token>, mã nhóm join-code/<code>, kết bạn add-friend/<code>).
+ */
+function resumePathFromUrl(url: string | null): string | null {
   if (!url) return null;
   const parsed = Linking.parse(url);
   const path = (parsed.path ?? '').replace(/^\/+/, '');
-  if (!path.startsWith('join/')) return null;
-  const token = path.split('/')[1] || (typeof parsed.queryParams?.token === 'string' ? parsed.queryParams.token : '');
-  return token ? `/join/${token}` : null;
+  const route = resumableRoute(path);
+  if (route) return route;
+  // Dạng cũ: …/join?token=<token>
+  const token = typeof parsed.queryParams?.token === 'string' ? parsed.queryParams.token : '';
+  return path === 'join' && token ? resumableRoute(`join/${token}`) : null;
 }
 
 /** Chuyển hướng dựa trên trạng thái đăng nhập */
@@ -52,14 +58,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     Linking.getInitialURL()
       .then((url) => {
-        const path = joinPathFromUrl(url);
+        const path = resumePathFromUrl(url);
         if (path && !sessionRef.current) setPendingLink(path);
       })
       .catch(() => {});
 
     // Liên kết tới khi app đang chạy: expo-router tự điều hướng; chỉ cần nhớ nếu chưa đăng nhập
     const subscription = Linking.addEventListener('url', ({ url }) => {
-      const path = joinPathFromUrl(url);
+      const path = resumePathFromUrl(url);
       if (path && !sessionRef.current) setPendingLink(path);
     });
     return () => subscription.remove();
@@ -74,8 +80,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!session && !inAuthGroup) {
-      // APP-11: Đang ở màn join/[token] mà chưa đăng nhập → nhớ đường dẫn
-      if (pathname.startsWith('/join/')) setPendingLink(pathname);
+      // APP-11: Đang ở màn mở từ liên kết (join / join-code / add-friend) mà chưa đăng nhập → nhớ đường dẫn
+      const resume = resumableRoute(pathname);
+      if (resume) setPendingLink(resume);
       // REV-A5: Stack.Protected đã gỡ các màn cần đăng nhập khỏi ngăn xếp; replace để chắc chắn tới sign-in
       router.replace('/(auth)/sign-in' as any);
     } else if (session && inAuthGroup) {
@@ -156,6 +163,10 @@ function RootStack() {
         <Stack.Screen name="contacts" />
         <Stack.Screen name="user" />
         <Stack.Screen name="join" />
+        {/* MVP-04 / MVP-05: QR mã nhóm và QR kết bạn */}
+        <Stack.Screen name="join-code/[code]" />
+        <Stack.Screen name="add-friend/[code]" />
+        <Stack.Screen name="scan" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
         <Stack.Screen name="notifications" />
         <Stack.Screen name="history" options={{ headerShown: true, title: 'Lịch sử' }} />
       </Stack.Protected>

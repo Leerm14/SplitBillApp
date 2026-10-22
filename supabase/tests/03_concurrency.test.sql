@@ -66,7 +66,7 @@ SELECT is(
   ARRAY(
     SELECT f FROM unnest(ARRAY[
       'public.leave_group(uuid)', 'public.remove_member(uuid,uuid)', 'public.close_group(uuid)',
-      'public.anonymize_account(uuid)', 'public.update_group(uuid,text,text,boolean)',
+      'public.anonymize_account(uuid)', 'public.update_group(uuid,text,text,boolean,text,boolean)',
       'public.rotate_invite_code(uuid)'
     ]) f
     WHERE _t.def(f) !~* 'for\s+update'

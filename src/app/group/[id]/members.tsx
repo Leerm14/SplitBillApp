@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   closeGroup,
+  createInvite,
   fetchGroup,
   fetchGroupMembers,
   isActiveMember,
@@ -22,6 +23,7 @@ import {
   transferOwnership,
 } from '@/api/groups';
 import { toUserMessage } from '@/api/errors';
+import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
 
 const AVATAR_COLORS = ['#007AFF', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#FF3B30', '#5856D6'];
@@ -90,6 +92,17 @@ export default function MembersScreen() {
     },
     onError: (err: any) => {
       Alert.alert('Lỗi', toUserMessage(err, 'Không thể đóng nhóm'));
+    },
+  });
+
+  const reinviteMutation = useMutation({
+    mutationFn: (userId: string) => createInvite(id, { invitedUserId: userId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['group-invites', id] });
+      Alert.alert('Thành công', 'Đã gửi lời mời. Người được mời sẽ nhận thông báo để tham gia lại.');
+    },
+    onError: (err: any) => {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể mời lại'));
     },
   });
 
@@ -175,7 +188,6 @@ export default function MembersScreen() {
           {/* NEW-03: Người đã rời / bị xóa không còn là thành viên */}
           {(membersQ.data || []).filter(isActiveMember).map((member: any, index: number) => {
             const name = member.displayName || member.id.slice(0, 8);
-            const letter = name[0].toUpperCase();
             const color = AVATAR_COLORS[index % AVATAR_COLORS.length];
             const isMemberOwner = member.id === groupQ.data?.owner_id;
 
@@ -186,9 +198,7 @@ export default function MembersScreen() {
                 onLongPress={() => handleMemberPress(member)}
                 disabled={!isOwner || member.id === user?.id}
               >
-                <View style={[styles.avatar, { backgroundColor: color }]}>
-                  <Text style={styles.avatarText}>{letter}</Text>
-                </View>
+                <Avatar name={name} path={member.avatarPath} color={color} size={44} />
                 <View style={styles.memberInfo}>
                   <Text style={styles.memberName}>
                     {name}
@@ -205,6 +215,42 @@ export default function MembersScreen() {
             );
           })}
         </View>
+
+        {/* Removed/left members - only visible to owner */}
+        {isOwner && (() => {
+          const removedMembers = (membersQ.data || []).filter((m: any) => !isActiveMember(m));
+          if (removedMembers.length === 0) return null;
+          return (
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Đã rời nhóm / Bị xóa</Text>
+              {removedMembers.map((member: any) => {
+                const name = member.displayName || member.id.slice(0, 8);
+                const statusLabel = member.status === 'LEFT' ? 'Đã rời' : 'Bị xóa';
+                return (
+                  <View key={member.id} style={styles.memberRow}>
+                    <Avatar name={name} path={member.avatarPath} color="#C7C7CC" size={44} />
+                    <View style={styles.memberInfo}>
+                      <Text style={[styles.memberName, { color: '#8E8E93' }]}>{name}</Text>
+                      <Text style={styles.memberRole}>{statusLabel}</Text>
+                    </View>
+                    <Pressable
+                      style={styles.reinviteBtn}
+                      onPress={() =>
+                        Alert.alert('Mời lại', `Gửi lời mời vào nhóm cho ${name}? Người này sẽ nhận thông báo.`, [
+                          { text: 'Hủy', style: 'cancel' },
+                          { text: 'Mời lại', onPress: () => reinviteMutation.mutate(member.id) },
+                        ])
+                      }
+                      disabled={reinviteMutation.isPending}
+                    >
+                      <Text style={styles.reinviteBtnText}>Mời lại</Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
 
         {/* Bottom actions */}
         <View style={styles.bottomActions}>
@@ -264,14 +310,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E5E5EA',
     gap: 12,
   },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: { fontSize: 16, fontWeight: '700', color: '#fff' },
   memberInfo: { flex: 1 },
   memberName: { fontSize: 15, fontWeight: '500', color: '#1a1a1a' },
   memberRole: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
@@ -287,4 +325,11 @@ const styles = StyleSheet.create({
   },
   dangerBtnDisabled: { opacity: 0.5 },
   dangerBtnText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
+  reinviteBtn: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  reinviteBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 });

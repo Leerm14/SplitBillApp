@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -18,6 +18,7 @@ import { fetchMyGroupBalances, type GroupWithRole } from '@/api/groups';
 import { fetchPayments } from '@/api/payments';
 import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
+import { DEFAULT_TIME_FILTER, isWithinFilter, TIME_FILTERS, type TimeFilter } from '@/domain/time-filter';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupsList } from '@/hooks/use-groups';
 
@@ -64,6 +65,10 @@ export default function HomeScreen() {
     error: groupsError,
   } = useGroupsList();
   const myId = user?.id ?? null;
+
+  // MVP-09: bộ lọc thời gian cho "Giao dịch gần đây" (HOME-01). Mặc định "Tất cả" để không giao dịch
+  // nào bị ẩn mà người dùng không biết; tổng cần thu / cần trả không đổi theo bộ lọc (BR-10).
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>(DEFAULT_TIME_FILTER);
 
   // REV-S7: đăng ký theo dõi khoản chi / thanh toán của từng nhóm (useQueries) — danh sách
   // "Giao dịch gần đây" và huy hiệu chờ xác nhận tự cập nhật khi cache đổi (không đọc getQueryData).
@@ -121,7 +126,7 @@ export default function HomeScreen() {
   };
 
   /** REV-S7: Giao dịch gần đây từ các query đang theo dõi (tự cập nhật khi cache đổi) */
-  const recentTransactions: RecentTransaction[] = (() => {
+  const allTransactions: RecentTransaction[] = (() => {
     const items: RecentTransaction[] = [];
     groups.forEach((g, i) => {
       for (const e of expensesQs[i]?.data ?? []) {
@@ -148,8 +153,12 @@ export default function HomeScreen() {
       }
     });
     items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    return items.slice(0, 5);
+    return items;
   })();
+
+  // MVP-09: lọc theo thời gian (chỉ danh sách; tổng cần thu / cần trả giữ nguyên — BR-10)
+  const now = new Date();
+  const recentTransactions = allTransactions.filter((tx) => isWithinFilter(tx.date, timeFilter, now)).slice(0, 50);
 
   /** REV-S7: Huy hiệu chỉ đếm thanh toán PENDING mình cần xác nhận (người nhận) hoặc mình đã gửi */
   const pendingCountByGroup: Record<string, number> = {};
@@ -165,10 +174,30 @@ export default function HomeScreen() {
   const mostRecentGroupId = groups.length > 0 ? groups[0].id : null;
 
   const renderFooter = useCallback(() => {
-    if (recentTransactions.length === 0) return null;
+    if (allTransactions.length === 0) return null;
     return (
       <View style={styles.recentSection}>
         <Text style={styles.recentTitle}>🕐 Giao dịch gần đây</Text>
+        {/* MVP-09: bộ lọc thời gian */}
+        <View style={styles.filterRow}>
+          {TIME_FILTERS.map((f) => {
+            const active = f.key === timeFilter;
+            return (
+              <Pressable
+                key={f.key}
+                style={[styles.filterChip, active && styles.filterChipActive]}
+                onPress={() => setTimeFilter(f.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>{f.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {recentTransactions.length === 0 ? (
+          <Text style={styles.recentEmpty}>Không có giao dịch trong khoảng thời gian này</Text>
+        ) : null}
         {recentTransactions.map((tx) => (
           <Pressable
             key={`${tx.type}-${tx.id}`}
@@ -193,7 +222,7 @@ export default function HomeScreen() {
         ))}
       </View>
     );
-  }, [recentTransactions, router]);
+  }, [allTransactions.length, recentTransactions, router, timeFilter]);
 
   const renderHeader = useCallback(() => (
     <View style={styles.header}>
@@ -401,7 +430,14 @@ const styles = StyleSheet.create({
 
   // Recent transactions
   recentSection: { marginTop: 8, paddingBottom: 80 },
-  recentTitle: { fontSize: 17, fontWeight: '700', color: '#1a1a1a', marginBottom: 12 },
+  recentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  recentTitle: { fontSize: 17, fontWeight: '700', color: '#1a1a1a', marginBottom: 8 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: '#e5e5ea' },
+  filterChipActive: { backgroundColor: '#007AFF' },
+  filterChipText: { fontSize: 13, color: '#3a3a3c', fontWeight: '500' },
+  filterChipTextActive: { color: '#fff', fontWeight: '600' },
+  recentEmpty: { fontSize: 14, color: '#8E8E93', paddingVertical: 12, textAlign: 'center' },
   recentItem: {
     backgroundColor: '#fff',
     borderRadius: 12,

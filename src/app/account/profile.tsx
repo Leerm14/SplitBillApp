@@ -1,9 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import * as Clipboard from 'expo-clipboard';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,13 +12,11 @@ import {
   View,
 } from 'react-native';
 
-import {
-  fetchProfile,
-  updateProfile,
-  getAvatarUrl,
-} from '@/api/profiles';
+import { fetchProfile, updateProfile, uploadAvatar, deleteAvatar, type Profile } from '@/api/profiles';
 import { toUserMessage } from '@/api/errors';
+import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
+import { showImageActions } from '@/lib/pick-image';
 
 export default function ProfileScreen() {
   const { user } = useAuth();
@@ -37,6 +35,8 @@ export default function ProfileScreen() {
   const [localDisplayName, setLocalDisplayName] = useState<string | null>(null);
   const displayName = localDisplayName ?? profile?.display_name ?? '';
   const setDisplayName = setLocalDisplayName;
+
+  const [avatarBusy, setAvatarBusy] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: (updates: { display_name?: string; searchable?: boolean }) =>
@@ -58,18 +58,66 @@ export default function ProfileScreen() {
     updateMutation.mutate({ display_name: displayName.trim() });
   };
 
-  const handleAvatarPress = () => {
-    Alert.alert('Ảnh đại diện', 'Chọn hành động', [
-      { text: 'Chụp ảnh', onPress: () => Alert.alert('Thông báo', 'Tính năng đang được phát triển') },
-      { text: 'Chọn từ thư viện', onPress: () => Alert.alert('Thông báo', 'Tính năng đang được phát triển') },
-      { text: 'Xóa ảnh', style: 'destructive', onPress: () => Alert.alert('Thông báo', 'Tính năng đang được phát triển') },
+  /** Hồ sơ mới từ RPC → cập nhật cache ngay để mọi màn thấy ảnh mới */
+  const applyProfile = (next: Profile | null | undefined) => {
+    if (next?.id) queryClient.setQueryData(['profile'], next);
+    queryClient.invalidateQueries({ queryKey: ['profile'] });
+    queryClient.invalidateQueries({ queryKey: ['group-members'] });
+    queryClient.invalidateQueries({ queryKey: ['friends'] });
+  };
+
+  /** MVP-02: Upload ảnh mới lên Cloudinary, lưu public_id, xóa ảnh cũ */
+  const handleUploadAvatar = async (uri: string) => {
+    setAvatarBusy(true);
+    try {
+      applyProfile(await uploadAvatar(uri, profile?.avatar_path ?? null));
+      Alert.alert('Thành công', 'Đã cập nhật ảnh đại diện');
+    } catch (err: any) {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể upload ảnh. Vui lòng thử lại.'));
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  /** MVP-02: Xóa ảnh đại diện (clear_avatar rồi xóa trên Cloudinary) */
+  const handleDeleteAvatar = () => {
+    const previous = profile?.avatar_path;
+    if (!previous) return;
+    Alert.alert('Xóa ảnh đại diện', 'Bạn có chắc muốn xóa ảnh đại diện?', [
       { text: 'Hủy', style: 'cancel' },
+      {
+        text: 'Xóa',
+        style: 'destructive',
+        onPress: async () => {
+          setAvatarBusy(true);
+          try {
+            applyProfile(await deleteAvatar(previous));
+            Alert.alert('Thành công', 'Đã xóa ảnh đại diện');
+          } catch (err: any) {
+            Alert.alert('Lỗi', toUserMessage(err, 'Không thể xóa ảnh. Vui lòng thử lại.'));
+          } finally {
+            setAvatarBusy(false);
+          }
+        },
+      },
     ]);
   };
 
-  const handleCopyCode = () => {
-    // Clipboard sẽ được thêm sau, tạm thời dùng Alert
-    Alert.alert('Mã người dùng', profile?.user_code || '');
+  const handleAvatarPress = () =>
+    showImageActions({
+      title: 'Ảnh đại diện',
+      square: true,
+      hasImage: !!profile?.avatar_path,
+      onPicked: (uri) => {
+        handleUploadAvatar(uri);
+      },
+      onRemove: handleDeleteAvatar,
+    });
+
+  const handleCopyCode = async () => {
+    if (!profile?.user_code) return;
+    await Clipboard.setStringAsync(profile.user_code);
+    Alert.alert('Đã sao chép', `Mã người dùng ${profile.user_code}`);
   };
 
   if (isLoading) {
@@ -92,20 +140,26 @@ export default function ProfileScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* Avatar section */}
       <View style={styles.card}>
-        <Pressable onPress={handleAvatarPress} style={styles.avatarContainer}>
-          {profile?.avatar_path ? (
-            <Image
-              source={{ uri: getAvatarUrl(profile.avatar_path) }}
-              style={styles.avatar}
-            />
-          ) : (
+        <Pressable
+          onPress={handleAvatarPress}
+          style={styles.avatarContainer}
+          disabled={avatarBusy}
+        >
+          {avatarBusy ? (
             <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarPlaceholderText}>
-                {(profile?.display_name || user?.email || '?')[0].toUpperCase()}
-              </Text>
+              <ActivityIndicator size="large" color="#fff" />
             </View>
+          ) : (
+            <Avatar
+              name={profile?.display_name || user?.email}
+              path={profile?.avatar_path}
+              seed={profile?.id}
+              size={80}
+            />
           )}
-          <Text style={styles.changeAvatarText}>Thay đổi ảnh</Text>
+          <Text style={styles.changeAvatarText}>
+            {avatarBusy ? 'Đang xử lý...' : 'Thay đổi ảnh'}
+          </Text>
         </Pressable>
       </View>
 
@@ -181,11 +235,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-  },
   avatarPlaceholder: {
     width: 80,
     height: 80,
@@ -193,11 +242,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  avatarPlaceholderText: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#fff',
   },
   changeAvatarText: {
     fontSize: 14,

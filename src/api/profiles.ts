@@ -1,4 +1,5 @@
 import { throwApiError } from '@/api/errors';
+import { destroyImage, imageUrl, uploadImage } from '@/api/images';
 import { supabase } from '@/lib/supabase';
 
 // ============================
@@ -13,14 +14,6 @@ export type Profile = {
   searchable: boolean;
   created_at: string;
 };
-
-async function getUserId(): Promise<string> {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Chưa đăng nhập');
-  return user.id;
-}
 
 /** Thông tin người khác được xem (SEC-04): chỉ 4 cột công khai. */
 export type PublicProfile = Pick<Profile, 'id' | 'display_name' | 'user_code' | 'avatar_path'>;
@@ -76,48 +69,32 @@ export async function updateProfile(updates: {
   });
 }
 
-export async function uploadAvatar(uri: string): Promise<string> {
-  const userId = await getUserId();
-
-  // Fetch file as blob
-  const response = await fetch(uri);
-  const blob = await response.blob();
-
-  const filePath = `${userId}/avatar.jpg`;
-
-  // Upload to storage
-  const { error: uploadError } = await supabase.storage
-    .from('avatars')
-    .upload(filePath, blob, {
-      upsert: true,
-      contentType: 'image/jpeg',
-    });
-
-  if (uploadError) throwApiError(uploadError);
-
-  // NEW-02: Lưu avatar_path qua RPC
-  await callUpdateProfile({ avatarPath: filePath });
-
-  // Return public URL
-  return getAvatarUrl(filePath);
+/**
+ * MVP-02: Đổi ảnh đại diện — upload Cloudinary → update_profile(_avatar_path) → xóa ảnh cũ (best-effort).
+ * `previousPath` là avatar_path hiện tại (public_id cũ) để xóa sau khi lưu thành công.
+ */
+export async function uploadAvatar(uri: string, previousPath?: string | null): Promise<Profile> {
+  const publicId = await uploadImage('avatar', uri);
+  let profile: Profile;
+  try {
+    profile = await callUpdateProfile({ avatarPath: publicId });
+  } catch (e) {
+    // Không lưu được → ảnh vừa upload thành mồ côi, xóa luôn
+    await destroyImage('avatar', publicId);
+    throw e;
+  }
+  if (previousPath && previousPath !== publicId) await destroyImage('avatar', previousPath);
+  return profile;
 }
 
-export async function deleteAvatar(): Promise<void> {
-  const userId = await getUserId();
-  const filePath = `${userId}/avatar.jpg`;
-
-  // Remove from storage
-  const { error: removeError } = await supabase.storage
-    .from('avatars')
-    .remove([filePath]);
-
-  if (removeError) throwApiError(removeError);
-
-  // NEW-02: Xóa avatar_path qua RPC (_clear_avatar)
-  await callUpdateProfile({ clearAvatar: true });
+/** MVP-02: Xóa ảnh đại diện — _clear_avatar rồi xóa ảnh trên Cloudinary (best-effort). */
+export async function deleteAvatar(previousPath: string | null | undefined): Promise<Profile> {
+  const profile = await callUpdateProfile({ clearAvatar: true });
+  await destroyImage('avatar', previousPath);
+  return profile;
 }
 
-export function getAvatarUrl(avatarPath: string): string {
-  return supabase.storage.from('avatars').getPublicUrl(avatarPath).data
-    .publicUrl;
+/** MVP-02: URL ảnh đại diện (Cloudinary, ảnh vuông `size` px); null → hiện chữ cái đầu. */
+export function getAvatarUrl(avatarPath: string | null | undefined, size = 200): string | null {
+  return imageUrl(avatarPath, { width: size });
 }

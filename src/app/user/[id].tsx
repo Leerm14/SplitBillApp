@@ -21,6 +21,8 @@ import {
 } from '@/api/contacts';
 import { toUserMessage } from '@/api/errors';
 import { fetchUserProfile } from '@/api/profiles';
+import { Avatar } from '@/components/avatar';
+import { PaymentHandleList } from '@/components/payment-handles';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function UserProfileScreen() {
@@ -130,11 +132,7 @@ export default function UserProfileScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         {/* Profile card */}
         <View style={styles.profileCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {(userProfile.display_name || '?')[0].toUpperCase()}
-            </Text>
-          </View>
+          <Avatar name={userProfile.display_name} path={userProfile.avatar_path} seed={userProfile.id} size={80} style={styles.avatar} />
           <Text style={styles.displayName}>{userProfile.display_name}</Text>
           <Text style={styles.userCode}>Mã: {userProfile.user_code}</Text>
         </View>
@@ -170,12 +168,7 @@ export default function UserProfileScreen() {
         {isFriend && (paymentHandles ?? []).length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Thông tin thanh toán</Text>
-            {paymentHandles!.map((handle: any) => (
-              <View key={handle.id} style={styles.handleCard}>
-                <Text style={styles.handleType}>{handle.type}</Text>
-                <Text style={styles.handleValue}>{handle.display_text}</Text>
-              </View>
-            ))}
+            <PaymentHandleList handles={paymentHandles!} />
           </View>
         )}
 
@@ -212,16 +205,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  avatarText: { fontSize: 36, fontWeight: '700', color: '#fff' },
+  avatar: { marginBottom: 8 },
   displayName: { fontSize: 24, fontWeight: '700', color: '#1a1a1a' },
   userCode: { fontSize: 15, color: '#8E8E93' },
 
@@ -263,26 +247,6 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 4,
   },
-  handleCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  handleType: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#8E8E93',
-    textTransform: 'uppercase',
-  },
-  handleValue: { fontSize: 16, color: '#1a1a1a', fontWeight: '500' },
 
   // Invite
   inviteBtn: {

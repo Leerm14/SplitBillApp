@@ -18,6 +18,7 @@ import {
 import { toUserMessage } from '@/api/errors';
 import { isActiveMember } from '@/api/groups';
 import { ErrorState } from '@/components/error-state';
+import { RecipientPaymentHandles } from '@/components/payment-handles';
 import { formatVND, parseVND } from '@/domain/money';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupSettlement } from '@/hooks/use-group-settlement';
@@ -225,6 +226,14 @@ export default function PayScreen() {
           ))}
         </View>
 
+        {/* MVP-07: phương thức thanh toán của người nhận, có nút sao chép */}
+        {toId ? (
+          <View style={styles.handlesBox}>
+            <Text style={styles.handlesTitle}>Thông tin chuyển khoản của {getName(toId)}</Text>
+            <RecipientPaymentHandles userId={toId} name={getName(toId)} />
+          </View>
+        ) : null}
+
         {/* Số tiền */}
         <Text style={styles.label}>Số tiền (VND)</Text>
         <TextInput
@@ -288,6 +297,8 @@ const styles = StyleSheet.create({
   suggestionText: { fontSize: 16, fontWeight: '500', color: '#1B5E20' },
 
   label: { fontSize: 15, fontWeight: '600', color: '#1a1a1a', marginTop: 4 },
+  handlesBox: { backgroundColor: '#fff', borderRadius: 12, padding: 12, gap: 8 },
+  handlesTitle: { fontSize: 14, fontWeight: '600', color: '#1a1a1a' },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',

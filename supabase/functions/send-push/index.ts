@@ -32,10 +32,10 @@ const corsHeaders = {
 };
 
 // Nội dung tiếng Việt cho MỌI loại thông báo mà RPC tạo (grep
-// `INSERT INTO public.notifications` trong supabase/migrations 0001–0011):
+// `INSERT INTO public.notifications` trong supabase/migrations 0001–0012):
 //   EXPENSE_CREATED/UPDATED/CANCELLED, PAYMENT_CREATED/CONFIRMED/REJECTED/DISPUTED/
 //   CANCELLED, MEMBER_JOINED/LEFT/REMOVED, OWNERSHIP_RECEIVED/TRANSFERRED,
-//   FRIEND_REQUEST/ACCEPTED/DECLINED.
+//   FRIEND_REQUEST/ACCEPTED/DECLINED, GROUP_INVITED (0012, kèm invite_id).
 // Thêm loại mới trong migration → thêm vào đây (loại lạ rơi về nội dung chung).
 function getNotificationContent(
   type: string,
@@ -62,6 +62,8 @@ function getNotificationContent(
     MEMBER_REMOVED: { title: 'Bạn đã bị xóa khỏi nhóm', body: `Bạn không còn là thành viên của nhóm${group}` },
     OWNERSHIP_RECEIVED: { title: 'Bạn là chủ nhóm mới', body: `Bạn đã được chuyển quyền chủ nhóm${group}` },
     OWNERSHIP_TRANSFERRED: { title: 'Đã chuyển quyền chủ nhóm', body: `Bạn đã chuyển quyền chủ nhóm${group}` },
+    // Lời mời đích danh (MVP-06): "<tên người mời> mời bạn vào nhóm <tên nhóm>"
+    GROUP_INVITED: { title: 'Lời mời vào nhóm', body: `${actor} mời bạn vào nhóm${group}` },
     // Bạn bè
     FRIEND_REQUEST: { title: 'Lời mời kết bạn', body: `${actor} muốn kết bạn với bạn` },
     FRIEND_ACCEPTED: { title: 'Đã trở thành bạn bè', body: `${actor} đã chấp nhận lời mời kết bạn` },
@@ -144,7 +146,7 @@ Deno.serve(async (req) => {
     // Đọc lại bản ghi thực từ DB (không tin payload)
     const { data: record, error: recordError } = await supabase
       .from('notifications')
-      .select('id, user_id, type, group_id, expense_id, payment_id, actor_id, created_at')
+      .select('id, user_id, type, group_id, expense_id, payment_id, actor_id, invite_id, created_at')
       .eq('id', notificationId)
       .single();
 
@@ -179,7 +181,7 @@ Deno.serve(async (req) => {
       groupName = group?.name;
     }
 
-    // Tên người thực hiện (thông báo bạn bè, MEMBER_JOINED)
+    // Tên người thực hiện (thông báo bạn bè, MEMBER_JOINED, GROUP_INVITED)
     let actorName: string | undefined;
     if (record.actor_id) {
       const { data: actor } = await supabase
@@ -206,6 +208,8 @@ Deno.serve(async (req) => {
         payment_id: record.payment_id,
         // Thông báo bạn bè: app mở hồ sơ người này (/user/<actor_id>)
         actor_id: record.actor_id,
+        // GROUP_INVITED: app gọi accept_invite_by_id(invite_id)
+        invite_id: record.invite_id,
       },
     }));
 

@@ -9,8 +9,8 @@
 import NetInfo from '@react-native-community/netinfo';
 
 import { getSession } from '@/api/auth';
-import { getServerErrorCode } from '@/api/errors';
-import { createExpense, type ExpenseShareInput } from '@/api/expenses';
+import { getServerErrorCode, isRetryableError } from '@/api/errors';
+import { createExpense, uploadReceiptFile, type ExpenseShareInput } from '@/api/expenses';
 import {
   cancelPayment,
   confirmPayment,
@@ -20,6 +20,7 @@ import {
   rejectPayment,
 } from '@/api/payments';
 import { formatVND } from '@/domain/money';
+import { deleteLocalReceipt, localFileExists } from '@/lib/receipt-files';
 
 import { classifyFailure, isDueForAttempt, queueItemAgeMs } from './policy';
 import {
@@ -49,6 +50,10 @@ export type CreateExpensePayload = {
   idempotencyKey: string;
   splitMethod: string;
   note?: string;
+  /** MVP-01: `<groupId>/<uuid>/<uuid>.jpg` — tạo một lần cho mỗi form */
+  receiptPath?: string;
+  /** MVP-01: bản sao ảnh đã nén trong thư mục tài liệu; upload (upsert) trước khi gọi create_expense */
+  localReceiptUri?: string;
 };
 
 export type CreatePaymentPayload = {
@@ -86,8 +91,34 @@ const PAYMENT_TARGET_STATUS: Partial<Record<QueueAction, string>> = {
   cancel_payment: 'CANCELLED',
 };
 
+/**
+ * MVP-01: Thêm khoản chi kèm ảnh hóa đơn từ hàng đợi.
+ * 1. Còn bản sao ảnh trên máy → upload (upsert, cùng đường dẫn nên gửi lại không tạo ảnh mồ côi).
+ *    - Lỗi tạm thời (mất mạng…) → ném lỗi để hàng đợi thử lại sau.
+ *    - Lỗi khác (không có quyền, file hỏng…) → vẫn lưu khoản chi, không kèm ảnh.
+ *    - Không còn bản sao (đã upload + dọn ở lần trước) → giữ receiptPath.
+ * 2. create_expense (idempotency key chỉ so nhóm, nên receiptPath khác giữa các lần gửi không gây xung đột).
+ * 3. Thành công → xóa bản sao.
+ */
+async function createExpenseFromQueue(p: CreateExpensePayload): Promise<unknown> {
+  const { localReceiptUri, ...params } = p;
+  let receiptPath = params.receiptPath;
+  if (localReceiptUri && receiptPath && localFileExists(localReceiptUri)) {
+    try {
+      await uploadReceiptFile(receiptPath, localReceiptUri);
+    } catch (error) {
+      if (isRetryableError(error)) throw error;
+      console.warn('[Queue] Không upload được ảnh hóa đơn, lưu khoản chi không kèm ảnh:', (error as Error)?.message);
+      receiptPath = undefined;
+    }
+  }
+  const result = await createExpense({ ...params, receiptPath });
+  deleteLocalReceipt(localReceiptUri);
+  return result;
+}
+
 const ACTION_HANDLERS: Record<QueueAction, ActionHandler> = {
-  create_expense: (p: CreateExpensePayload) => createExpense(p),
+  create_expense: (p: CreateExpensePayload) => createExpenseFromQueue(p),
   // NEW-04: Payload trong hàng đợi dùng camelCase — đổi sang tham số của createPayment
   create_payment: (p: CreatePaymentPayload) =>
     createPayment({

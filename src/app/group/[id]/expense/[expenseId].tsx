@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React from 'react';
+import { Image } from 'expo-image';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,9 +15,11 @@ import {
 import { toUserMessage } from '@/api/errors';
 import { cancelExpense, fetchExpense } from '@/api/expenses';
 import { isActiveMember } from '@/api/groups';
+import { ReceiptViewer } from '@/components/receipt-image';
 import { formatVND } from '@/domain/money';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupAccess } from '@/hooks/use-group-settlement';
+import { useReceiptUrl } from '@/hooks/use-receipt-url';
 
 export default function ExpenseDetailScreen() {
   const { id: groupId, expenseId } = useLocalSearchParams<{ id: string; expenseId: string }>();
@@ -31,6 +34,10 @@ export default function ExpenseDetailScreen() {
 
   // REV-S5 / REV-S10: quyền ghi của mình + trạng thái thành viên của người tham gia khoản chi
   const { groupQ, membersQ, canWrite, isViewerActive } = useGroupAccess(groupId);
+  // MVP-01: Ảnh hóa đơn — signed URL ngắn hạn (chỉ thành viên nhóm lấy được)
+  const receiptQ = useReceiptUrl(expenseQ.data?.receipt_path);
+  const receiptUrl = receiptQ.data ?? null;
+  const [receiptFullscreen, setReceiptFullscreen] = useState(false);
 
   const handleCancel = () => {
     Alert.alert('Hủy khoản chi', 'Bạn có chắc muốn hủy khoản chi này?', [
@@ -166,6 +173,26 @@ export default function ExpenseDetailScreen() {
           <Text style={styles.noteText}>{expense.note}</Text>
         </View>
       ) : null}
+
+
+      {/* MVP-01: Ảnh hóa đơn — chạm để xem toàn màn hình */}
+      {expense.receipt_path ? (
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Ảnh hóa đơn</Text>
+          {receiptUrl ? (
+            <Pressable onPress={() => setReceiptFullscreen(true)} accessibilityLabel="Xem ảnh hóa đơn">
+              <Image source={{ uri: receiptUrl }} style={styles.receiptThumb} contentFit="cover" />
+            </Pressable>
+          ) : receiptQ.isLoading ? (
+            <ActivityIndicator color="#007AFF" />
+          ) : (
+            <Pressable onPress={() => receiptQ.refetch()}>
+              <Text style={styles.receiptError}>Không tải được ảnh hóa đơn. Chạm để thử lại.</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
+      <ReceiptViewer uri={receiptUrl} visible={receiptFullscreen} onClose={() => setReceiptFullscreen(false)} />
 
       {/* Card 5: Thông tin */}
       <View style={styles.card}>
@@ -360,4 +387,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelledInfoText: { fontSize: 14, color: '#C62828' },
+
+  // MVP-01: ảnh hóa đơn
+  receiptThumb: { width: '100%', height: 200, borderRadius: 8 },
+  receiptError: { fontSize: 14, color: '#FF3B30' },
 });

@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { toUserMessage } from '@/api/errors';
 import { cancelExpense } from '@/api/expenses';
 import { isActiveMember } from '@/api/groups';
+import { Avatar } from '@/components/avatar';
 import { ErrorState } from '@/components/error-state';
 import { formatVND } from '@/domain/money';
 import { describeMyPosition } from '@/domain/suggest';
@@ -170,30 +171,29 @@ export default function GroupDetailScreen() {
       >
         {/* Header nhóm */}
         <View style={styles.groupHeader}>
+          {/* MVP-03: ảnh nhóm */}
+          <Avatar name={groupQ.data?.name} path={groupQ.data?.avatar_path} seed={id} size={64} />
           <Text style={styles.groupName}>{groupQ.data?.name}</Text>
+          {groupQ.data?.description ? (
+            <Text style={styles.groupDescription}>{groupQ.data.description}</Text>
+          ) : null}
           <Pressable onPress={handleShareInvite}>
             <Text style={styles.inviteCode}>📋 Mã mời: {groupQ.data?.invite_code}</Text>
           </Pressable>
 
-          {/* Member avatars */}
+          {/* Member avatars — MVP-02: ảnh đại diện, chưa có thì chữ cái đầu */}
           {activeMembers.length > 0 && (
             <View style={styles.memberAvatars}>
-              {activeMembers.map((m, index) => {
-                const name = m.displayName || m.id.slice(0, 8);
-                const letter = name[0].toUpperCase();
-                const color = AVATAR_COLORS[index % AVATAR_COLORS.length];
-                return (
-                  <View
-                    key={m.id}
-                    style={[
-                      styles.memberAvatar,
-                      { backgroundColor: color, marginLeft: index > 0 ? -8 : 0 },
-                    ]}
-                  >
-                    <Text style={styles.memberAvatarText}>{letter}</Text>
-                  </View>
-                );
-              })}
+              {activeMembers.slice(0, 8).map((m, index) => (
+                <Avatar
+                  key={m.id}
+                  name={m.displayName || m.id.slice(0, 8)}
+                  path={m.avatarPath}
+                  color={AVATAR_COLORS[index % AVATAR_COLORS.length]}
+                  size={32}
+                  style={[styles.memberAvatar, { marginLeft: index > 0 ? -8 : 0 }]}
+                />
+              ))}
               <Text style={styles.memberCount}>
                 {activeMembers.length} thành viên
               </Text>
@@ -515,6 +515,7 @@ const styles = StyleSheet.create({
 
   groupHeader: { padding: 20, backgroundColor: '#fff', alignItems: 'center', gap: 4 },
   groupName: { fontSize: 22, fontWeight: '700', color: '#1a1a1a' },
+  groupDescription: { fontSize: 14, color: '#666', textAlign: 'center' },
   inviteCode: { fontSize: 14, color: '#007AFF', fontWeight: '500' },
   memberAvatars: {
     flexDirection: 'row',
@@ -522,16 +523,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 0,
   },
-  memberAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  memberAvatarText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  memberAvatar: { borderWidth: 2, borderColor: '#fff' },
   memberCount: { fontSize: 13, color: '#8E8E93', marginLeft: 8 },
 
   actions: { flexDirection: 'row', gap: 12, padding: 16 },

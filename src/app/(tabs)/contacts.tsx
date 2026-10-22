@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
 import { fetchFriends, fetchPendingRequests, respondFriendRequest } from '@/api/contacts';
+import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
 
 type FriendProfile = {
@@ -135,11 +136,7 @@ export default function ContactsScreen() {
                 return (
                   <View key={req.requester_id} style={styles.pendingCard}>
                     <View style={styles.pendingInfo}>
-                      <View style={styles.avatar}>
-                        <Text style={styles.avatarText}>
-                          {(requester?.display_name || '?')[0].toUpperCase()}
-                        </Text>
-                      </View>
+                      <Avatar name={requester?.display_name} path={requester?.avatar_path} seed={requester?.id} size={44} />
                       <View style={styles.pendingMeta}>
                         <Text style={styles.friendName}>
                           {requester?.display_name || 'Người dùng'}
@@ -197,11 +194,7 @@ export default function ContactsScreen() {
               onPress={() => router.push(`/user/${profile.id}` as any)}
             >
               <View style={styles.friendRow}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
-                    {(profile.display_name || '?')[0].toUpperCase()}
-                  </Text>
-                </View>
+                <Avatar name={profile.display_name} path={profile.avatar_path} seed={profile.id} size={44} />
                 <View style={styles.friendMeta}>
                   <Text style={styles.friendName}>{profile.display_name}</Text>
                   <Text style={styles.friendCode}>{profile.user_code}</Text>
@@ -317,15 +310,6 @@ const styles = StyleSheet.create({
     gap: 12,
     flex: 1,
   },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: { fontSize: 18, fontWeight: '700', color: '#fff' },
   friendMeta: { flex: 1 },
   friendName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
   friendCode: { fontSize: 13, color: '#8E8E93', marginTop: 2 },

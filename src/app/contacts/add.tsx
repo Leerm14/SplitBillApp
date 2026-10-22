@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import React, { useState, useCallback } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -11,10 +13,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import QRCode from 'react-native-qrcode-svg';
 
 import { toUserMessage } from '@/api/errors';
-import { searchUsers, sendFriendRequest } from '@/api/contacts';
+import { fetchUserByCode, searchUsers, sendFriendRequest } from '@/api/contacts';
 import { fetchProfile } from '@/api/profiles';
+import { Avatar } from '@/components/avatar';
+import { createAppLink } from '@/lib/app-link-url';
+import { SHORT_CODE_RE } from '@/lib/app-links';
 
 type SearchResult = {
   id: string;
@@ -26,7 +32,12 @@ type SearchResult = {
 
 export default function AddFriendScreen() {
   const queryClient = useQueryClient();
-  const [query, setQuery] = useState('');
+  const router = useRouter();
+  // MVP-05: mở kèm ?code=<user_code> (từ QR) → tìm chính xác theo mã
+  const { code: codeParam } = useLocalSearchParams<{ code?: string }>();
+  const initialCode = typeof codeParam === 'string' ? codeParam.trim().toUpperCase() : '';
+  const [query, setQuery] = useState(initialCode);
+  const [showMyQr, setShowMyQr] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [sentIds, setSentIds] = useState<Set<string>>(new Set());
@@ -35,6 +46,26 @@ export default function AddFriendScreen() {
     queryKey: ['profile'],
     queryFn: fetchProfile,
   });
+
+  /** MVP-05: tìm đúng một người theo mã (find_user_by_code — không lọc searchable) */
+  const searchByCode = useCallback(async (code: string) => {
+    setSearching(true);
+    try {
+      const found = await fetchUserByCode(code);
+      setResults(found ? [{ ...found, friendship_status: null }] : []);
+    } catch (err: any) {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tìm kiếm'));
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  const searchedCodeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!SHORT_CODE_RE.test(initialCode) || searchedCodeRef.current === initialCode) return;
+    searchedCodeRef.current = initialCode;
+    searchByCode(initialCode);
+  }, [initialCode, searchByCode]);
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -112,11 +143,7 @@ export default function AddFriendScreen() {
             return (
               <View style={styles.resultCard}>
                 <View style={styles.resultRow}>
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>
-                      {(item.display_name || '?')[0].toUpperCase()}
-                    </Text>
-                  </View>
+                  <Avatar name={item.display_name} path={item.avatar_path} seed={item.id} size={44} />
                   <View style={styles.resultMeta}>
                     <Text style={styles.resultName}>{item.display_name}</Text>
                     <Text style={styles.resultCode}>{item.user_code}</Text>
@@ -149,20 +176,50 @@ export default function AddFriendScreen() {
       <View style={styles.myCodeSection}>
         <Text style={styles.myCodeLabel}>Mã người dùng của bạn</Text>
         <View style={styles.myCodeCard}>
-          <View style={styles.qrPlaceholder}>
-            <Text style={styles.qrText}>📱</Text>
-            <Text style={styles.qrSubtext}>QR Code</Text>
-          </View>
+          {profile?.user_code ? (
+            <Pressable onPress={() => setShowMyQr(true)} accessibilityLabel="Phóng to mã QR của bạn">
+              <QRCode
+                value={createAppLink({ kind: 'add-friend', code: profile.user_code })}
+                size={72}
+                backgroundColor="#fff"
+              />
+            </Pressable>
+          ) : (
+            <View style={styles.qrPlaceholder}>
+              <ActivityIndicator size="small" color="#8E8E93" />
+            </View>
+          )}
           <View style={styles.codeDisplay}>
             <Text style={styles.codeValue}>
               {profile?.user_code || '---'}
             </Text>
             <Text style={styles.codeHint}>
-              Chia sẻ mã này để bạn bè thêm bạn
+              Chạm vào mã QR để phóng to cho bạn bè quét
             </Text>
           </View>
         </View>
+        <Pressable style={styles.scanBtn} onPress={() => router.push('/scan')}>
+          <Text style={styles.scanBtnText}>📷 Quét mã QR bạn bè</Text>
+        </Pressable>
       </View>
+
+      {/* MVP-05: QR kết bạn cỡ lớn để quét */}
+      <Modal visible={showMyQr} transparent animationType="fade" onRequestClose={() => setShowMyQr(false)}>
+        <Pressable style={styles.qrOverlay} onPress={() => setShowMyQr(false)}>
+          <View style={styles.qrModal}>
+            <Text style={styles.qrTitle}>Mã QR kết bạn của bạn</Text>
+            {profile?.user_code ? (
+              <QRCode
+                value={createAppLink({ kind: 'add-friend', code: profile.user_code })}
+                size={220}
+                backgroundColor="#fff"
+              />
+            ) : null}
+            <Text style={styles.qrCode}>{profile?.user_code}</Text>
+            <Text style={styles.qrHint}>Chạm để đóng</Text>
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -224,15 +281,6 @@ const styles = StyleSheet.create({
     gap: 12,
     flex: 1,
   },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: { fontSize: 18, fontWeight: '700', color: '#fff' },
   resultMeta: { flex: 1 },
   resultName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
   resultCode: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
@@ -283,8 +331,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E5EA',
   },
-  qrText: { fontSize: 24 },
-  qrSubtext: { fontSize: 10, color: '#8E8E93' },
   codeDisplay: { flex: 1 },
   codeValue: {
     fontSize: 22,
@@ -293,4 +339,17 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   codeHint: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
+  scanBtn: {
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  scanBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  qrOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  qrModal: { backgroundColor: '#fff', borderRadius: 20, padding: 28, alignItems: 'center', gap: 14, marginHorizontal: 32 },
+  qrTitle: { fontSize: 17, fontWeight: '600', color: '#1a1a1a' },
+  qrCode: { fontSize: 22, fontWeight: '700', letterSpacing: 2, color: '#1a1a1a' },
+  qrHint: { fontSize: 13, color: '#8E8E93' },
 });

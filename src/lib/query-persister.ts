@@ -27,6 +27,8 @@ export const asyncStoragePersister = createAsyncStoragePersister({
   deserialize: JSON.parse,
 });
 
+const NON_PERSISTED_KEYS = new Set(['offline-queue', 'receipt-url']);
+
 // APP-12: Persist options with maxAge
 export const persistOptions = {
   persister: asyncStoragePersister,
@@ -34,8 +36,9 @@ export const persistOptions = {
   buster: '1.1.0', // Increment on breaking cache changes (1.1.0: kiểu dữ liệu API mới — APP-18)
   dehydrateOptions: {
     // APP-08: Danh sách hàng đợi offline đọc từ SQLite — không lưu vào cache
+    // MVP-01: signed URL ảnh hóa đơn hết hạn sau vài phút — không lưu
     shouldDehydrateQuery: (query: Query) =>
-      query.queryKey[0] !== 'offline-queue' && defaultShouldDehydrateQuery(query),
+      !NON_PERSISTED_KEYS.has(String(query.queryKey[0])) && defaultShouldDehydrateQuery(query),
   },
 };
 

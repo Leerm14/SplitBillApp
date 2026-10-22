@@ -12,14 +12,23 @@
  *    một giao dịch: khóa nhóm, kiểm tra lại các điều kiện trên, rời nhóm, thu hồi lời mời,
  *    xóa friendships / push_tokens / payment_handles / thông báo, ẩn danh hồ sơ.
  *    Bước nào lỗi → rollback toàn bộ → trả 409/500.
- * 4. Xóa ảnh đại diện trong bucket avatars (thư mục <user_id>/).
+ * 4. Xóa ảnh đại diện:
+ *    - Cloudinary: xóa MỌI ảnh có public_id bắt đầu bằng '<user_id>/' (Admin API, xóa theo
+ *      tiền tố) — không dựa vào profiles.avatar_path (đã bị ẩn danh xóa, và ảnh cũ / ảnh
+ *      upload dở cũng nằm dưới tiền tố này). Chạy cả khi tài khoản đã ẩn danh từ lần gọi
+ *      trước. Lỗi → 502 { error: 'CLOUDINARY_DELETE_FAILED: ...' }.
+ *    - Supabase Storage: xóa thư mục avatars/<user_id>/ (tương thích ngược).
  * 5. Xóa user Auth. profiles không còn FK CASCADE tới auth.users (migration 0010) nên hồ sơ
  *    ẩn danh ở lại làm "bia mộ" cho lịch sử nhóm.
  *
  * Chỉ trả 200 khi mọi bước thành công. Gọi lại sau khi lỗi ở bước 4/5 là an toàn:
  * anonymize_account trả already_anonymized = true và các bước sau chạy lại.
  *
+ * Cần secret CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET (thiếu → 500
+ * CONFIG_MISSING trước khi đụng tới dữ liệu).
+ *
  * Sửa lỗi: BE-04, BE-05, BE-14, APP-21
+ * MVP-02: xóa ảnh đại diện trên Cloudinary khi xóa tài khoản.
  */
 
 // Deno: import URL, không phải module Node (eslint chạy resolver Node)
@@ -28,6 +37,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+// MVP-02: Cloudinary credentials để xóa ảnh khi xóa tài khoản
+const cloudinaryCloudName = Deno.env.get('CLOUDINARY_CLOUD_NAME')?.trim();
+const cloudinaryApiKey = Deno.env.get('CLOUDINARY_API_KEY')?.trim();
+const cloudinaryApiSecret = Deno.env.get('CLOUDINARY_API_SECRET')?.trim();
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -47,7 +61,13 @@ const BUSINESS_CODES: Record<string, string> = {
 };
 
 /** Xóa mọi file trong thư mục avatars/<userId>/ (không phụ thuộc avatar_path đã bị xóa). */
-async function removeAvatarFolder(client: ReturnType<typeof createClient>, userId: string): Promise<string | null> {
+function makeServiceClient() {
+  return createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function removeAvatarFolder(client: ReturnType<typeof makeServiceClient>, userId: string): Promise<string | null> {
   for (let round = 0; round < 20; round++) {
     const { data: files, error: listError } = await client.storage
       .from('avatars')
@@ -61,6 +81,51 @@ async function removeAvatarFolder(client: ReturnType<typeof createClient>, userI
   return 'Too many avatar files';
 }
 
+const CLOUDINARY_TIMEOUT_MS = 15_000;
+const CLOUDINARY_MAX_ROUNDS = 20; // mỗi lần Admin API xóa tối đa 1000 ảnh
+
+/**
+ * MVP-02: xóa mọi ảnh Cloudinary dưới tiền tố '<userId>/' bằng Admin API
+ *   DELETE /v1_1/<cloud>/resources/image/upload?prefix=<userId>/
+ * (Basic auth api_key:api_secret). Không phụ thuộc profiles.avatar_path nên gọi lại sau
+ * lỗi vẫn dọn hết. Kết quả `partial: true` → còn ảnh, gọi tiếp với next_cursor.
+ * Trả null khi xong, chuỗi mô tả lỗi (không chứa secret) khi thất bại.
+ */
+async function deleteCloudinaryPrefix(userId: string): Promise<string | null> {
+  if (!cloudinaryCloudName || !cloudinaryApiKey || !cloudinaryApiSecret) {
+    return 'Cloudinary is not configured';
+  }
+  const authorization = `Basic ${btoa(`${cloudinaryApiKey}:${cloudinaryApiSecret}`)}`;
+  const base = `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudinaryCloudName)}/resources/image/upload`;
+  let cursor: string | undefined;
+
+  for (let round = 0; round < CLOUDINARY_MAX_ROUNDS; round++) {
+    const params = new URLSearchParams({ prefix: `${userId}/`, invalidate: 'true' });
+    if (cursor) params.set('next_cursor', cursor);
+
+    let response: Response;
+    try {
+      response = await fetch(`${base}?${params.toString()}`, {
+        method: 'DELETE',
+        headers: { Authorization: authorization },
+        signal: AbortSignal.timeout(CLOUDINARY_TIMEOUT_MS),
+      });
+    } catch (err) {
+      return `request failed (${(err as Error).name})`;
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | { partial?: boolean; next_cursor?: string; error?: { message?: string } }
+      | null;
+    if (!response.ok || !payload) {
+      return `HTTP ${response.status}${payload?.error?.message ? ` — ${payload.error.message}` : ''}`;
+    }
+    if (!payload.partial) return null;
+    cursor = payload.next_cursor;
+  }
+  return 'too many images, deletion incomplete';
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -69,14 +134,25 @@ Deno.serve(async (req) => {
   try {
     if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
+    // Thiếu cấu hình Cloudinary → dừng TRƯỚC khi ẩn danh (nếu không, ảnh sẽ mồ côi)
+    const missingConfig = [
+      ['CLOUDINARY_CLOUD_NAME', cloudinaryCloudName],
+      ['CLOUDINARY_API_KEY', cloudinaryApiKey],
+      ['CLOUDINARY_API_SECRET', cloudinaryApiSecret],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingConfig.length > 0) {
+      console.error('delete-account: missing config', missingConfig.join(', '));
+      return json({ error: `CONFIG_MISSING: Server is missing configuration: ${missingConfig.join(', ')}.` }, 500);
+    }
+
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return json({ error: 'Missing authorization header' }, 401);
     }
 
-    const serviceClient = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
+    const serviceClient = makeServiceClient();
     const {
       data: { user },
       error: authError,
@@ -153,6 +229,18 @@ Deno.serve(async (req) => {
     }
 
     // ── 4. Ảnh đại diện ──
+    // MVP-02: mọi ảnh Cloudinary dưới '<user_id>/' (chạy cả khi already_anonymized).
+    // Lỗi → trả lỗi để app gọi lại (anonymize_account idempotent, user Auth chưa bị xóa).
+    const cloudinaryError = await deleteCloudinaryPrefix(userId);
+    if (cloudinaryError) {
+      console.error('delete-account: Cloudinary avatar removal failed', cloudinaryError);
+      return json(
+        { error: 'CLOUDINARY_DELETE_FAILED: Không xóa được ảnh đại diện. Vui lòng thử lại.' },
+        502,
+      );
+    }
+
+    // Xóa trên Supabase Storage (tương thích ngược + dọn sạch)
     const avatarError = await removeAvatarFolder(serviceClient, userId);
     if (avatarError) {
       console.error('delete-account: avatar removal failed', avatarError);

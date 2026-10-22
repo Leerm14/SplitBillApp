@@ -10,6 +10,7 @@ export default function GroupLayout() {
         headerTintColor: '#007AFF',
       }}
     >
+      <Stack.Screen name="new" options={{ title: 'Tạo nhóm', presentation: 'modal' }} />
       <Stack.Screen name="[id]/index" options={{ title: 'Chi tiết nhóm' }} />
       <Stack.Screen name="[id]/add-expense" options={{ title: 'Thêm khoản chi', presentation: 'modal' }} />
       <Stack.Screen name="[id]/pay" options={{ title: 'Gửi thanh toán', presentation: 'modal' }} />

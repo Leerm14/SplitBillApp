@@ -15,6 +15,8 @@ export type NotificationItem = {
   group_id: string | null;
   expense_id: string | null;
   payment_id: string | null;
+  /** MVP-06: lời mời đích danh (thông báo GROUP_INVITED) */
+  invite_id: string | null;
   read_at: string | null;
   created_at: string;
   group: { id: string; name: string } | null;
@@ -24,7 +26,7 @@ export async function fetchNotifications(limit = 50): Promise<NotificationItem[]
   const { data, error, status } = await supabase
     .from('notifications')
     .select(`
-      id, user_id, type, group_id, expense_id, payment_id, read_at, created_at,
+      id, user_id, type, group_id, expense_id, payment_id, invite_id, read_at, created_at,
       group:group_id(id, name)
     `)
     .order('created_at', { ascending: false })

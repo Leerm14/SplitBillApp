@@ -15,9 +15,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { fetchGroup, updateGroup } from '@/api/groups';
+import { fetchGroup, updateGroup, type Group } from '@/api/groups';
+import { destroyImage, uploadImage } from '@/api/images';
+import { Avatar } from '@/components/avatar';
 import { isSimplifyEnabled } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
+import { showImageActions } from '@/lib/pick-image';
 
 export default function EditGroupScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -50,6 +53,65 @@ export default function EditGroupScreen() {
       router.back();
     }
   }, [groupQ.data, user, router]);
+
+  // MVP-03: đổi / xóa ảnh nhóm (lưu ngay, độc lập với nút Lưu)
+  const [imageBusy, setImageBusy] = useState(false);
+
+  const applyGroup = (next: Group | null | undefined) => {
+    if (next?.id) queryClient.setQueryData(['group', id], next);
+    queryClient.invalidateQueries({ queryKey: ['group', id] });
+    queryClient.invalidateQueries({ queryKey: ['groups'] });
+  };
+
+  const changeImage = async (uri: string) => {
+    const previous = groupQ.data?.avatar_path ?? null;
+    setImageBusy(true);
+    let publicId: string | null = null;
+    try {
+      publicId = await uploadImage('group', uri, { groupId: id });
+      applyGroup(await updateGroup(id, { avatar_path: publicId }));
+      if (previous && previous !== publicId) await destroyImage('group', previous, { groupId: id });
+    } catch (err) {
+      if (publicId) await destroyImage('group', publicId, { groupId: id });
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể đổi ảnh nhóm'));
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
+  const removeImage = () => {
+    const previous = groupQ.data?.avatar_path;
+    if (!previous) return;
+    Alert.alert('Xóa ảnh nhóm', 'Bạn có chắc muốn xóa ảnh nhóm?', [
+      { text: 'Hủy', style: 'cancel' },
+      {
+        text: 'Xóa',
+        style: 'destructive',
+        onPress: async () => {
+          setImageBusy(true);
+          try {
+            applyGroup(await updateGroup(id, { clear_avatar: true }));
+            await destroyImage('group', previous, { groupId: id });
+          } catch (err) {
+            Alert.alert('Lỗi', toUserMessage(err, 'Không thể xóa ảnh nhóm'));
+          } finally {
+            setImageBusy(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  const pickImage = () =>
+    showImageActions({
+      title: 'Ảnh nhóm',
+      square: true,
+      hasImage: !!groupQ.data?.avatar_path,
+      onPicked: (uri) => {
+        changeImage(uri);
+      },
+      onRemove: removeImage,
+    });
 
   const mutation = useMutation({
     // Hợp đồng update_group: NULL = giữ nguyên → chỉ gửi trường đã đổi
@@ -87,6 +149,18 @@ export default function EditGroupScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
+        {/* MVP-03: ảnh nhóm */}
+        <Pressable style={styles.imageRow} onPress={pickImage} disabled={imageBusy}>
+          {imageBusy ? (
+            <View style={styles.imageBusy}>
+              <ActivityIndicator color="#fff" />
+            </View>
+          ) : (
+            <Avatar name={groupQ.data?.name} path={groupQ.data?.avatar_path} seed={id} size={88} />
+          )}
+          <Text style={styles.imageHint}>{imageBusy ? 'Đang xử lý...' : 'Đổi ảnh nhóm'}</Text>
+        </Pressable>
+
         <View style={styles.card}>
           <Text style={styles.label}>Tên nhóm</Text>
           <TextInput
@@ -145,6 +219,16 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f2f2f7' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   content: { padding: 16, gap: 16 },
+  imageRow: { alignItems: 'center', gap: 8 },
+  imageBusy: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: '#8E8E93',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageHint: { fontSize: 14, color: '#007AFF', fontWeight: '500' },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,

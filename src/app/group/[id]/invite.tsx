@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocalSearchParams } from 'expo-router';
-import * as Linking from 'expo-linking';
-import React from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   Share,
@@ -13,18 +13,41 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import QRCode from 'react-native-qrcode-svg';
 
+import { fetchFriends, type Friendship } from '@/api/contacts';
 import { toUserMessage } from '@/api/errors';
-import { createInvite, fetchGroup, fetchInvites, revokeInvite } from '@/api/groups';
+import {
+  createInvite,
+  fetchGroup,
+  fetchGroupMembers,
+  fetchInvites,
+  isActiveMember,
+  rotateInviteCode,
+  revokeInvite,
+} from '@/api/groups';
+import { Avatar } from '@/components/avatar';
+import { useAuth } from '@/hooks/use-auth';
+import { createAppLink } from '@/lib/app-link-url';
 
 // APP-11: Tạo liên kết theo đúng scheme trong app.json ("splitbill"), không viết cứng
 function inviteLink(token: string): string {
-  return Linking.createURL(`/join/${token}`);
+  return createAppLink({ kind: 'join', token });
+}
+
+// MVP-04 / H2: QR mã mời nhóm chứa liên kết app (màn quét chỉ nhận liên kết của app)
+function groupCodeLink(code: string): string {
+  return createAppLink({ kind: 'join-code', code });
 }
 
 export default function InviteScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const { user } = useAuth();
+
+  const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set());
+  const [qrModalToken, setQrModalToken] = useState<string | null>(null);
 
   const groupQ = useQuery({
     queryKey: ['group', id],
@@ -35,6 +58,31 @@ export default function InviteScreen() {
     queryKey: ['group-invites', id],
     queryFn: () => fetchInvites(id),
   });
+
+  const friendsQ = useQuery({
+    queryKey: ['friends'],
+    queryFn: fetchFriends,
+  });
+
+  const membersQ = useQuery({
+    queryKey: ['group-members', id],
+    queryFn: () => fetchGroupMembers(id),
+  });
+
+  const availableFriends = React.useMemo(() => {
+    if (!friendsQ.data || !membersQ.data) return [];
+    // Người đã rời / bị xóa vẫn mời lại được (lời mời đích danh) — chỉ bỏ thành viên đang ACTIVE
+    const memberIds = new Set(membersQ.data.filter(isActiveMember).map((m) => m.id));
+    const userId = user?.id;
+    return friendsQ.data
+      .map((f: Friendship) => {
+        const friend = f.requester_id === userId ? f.addressee : f.requester;
+        return friend;
+      })
+      .filter((f): f is NonNullable<typeof f> => !!f && !memberIds.has(f.id));
+  }, [friendsQ.data, membersQ.data, user?.id]);
+
+  const isOwner = !!user && groupQ.data?.owner_id === user.id;
 
   const createMutation = useMutation({
     mutationFn: () => createInvite(id),
@@ -61,11 +109,34 @@ export default function InviteScreen() {
     },
   });
 
+  const inviteFriendMutation = useMutation({
+    mutationFn: (friendId: string) => createInvite(id, { invitedUserId: friendId }),
+    onSuccess: (_data, friendId) => {
+      setInvitedIds(prev => new Set(prev).add(friendId));
+      queryClient.invalidateQueries({ queryKey: ['group-invites', id] });
+      Alert.alert('Thành công', 'Đã gửi lời mời. Bạn bè sẽ nhận thông báo để tham gia nhóm.');
+    },
+    onError: (err: any) => {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể mời'));
+    },
+  });
+
+  const rotateMutation = useMutation({
+    mutationFn: () => rotateInviteCode(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['group', id] });
+      Alert.alert('Thành công', 'Đã đổi mã mời nhóm');
+    },
+    onError: (err: any) => {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể đổi mã mời'));
+    },
+  });
+
   const handleShareInviteCode = async () => {
     if (!groupQ.data) return;
     try {
       await Share.share({
-        message: `Tham gia nhóm "${groupQ.data.name}" trên Split Bill!\nMã mời: ${groupQ.data.invite_code}`,
+        message: `Tham gia nhóm "${groupQ.data.name}" trên Split Bill!\nMã mời: ${groupQ.data.invite_code}\n${groupCodeLink(groupQ.data.invite_code)}`,
       });
     } catch {}
   };
@@ -99,9 +170,40 @@ export default function InviteScreen() {
         {/* Invite code */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Mã mời nhóm</Text>
+          {groupQ.data?.invite_code && (
+            <View style={styles.qrCenter}>
+              <QRCode
+                value={groupCodeLink(groupQ.data.invite_code)}
+                size={160}
+                backgroundColor="#fff"
+              />
+            </View>
+          )}
           <Text style={styles.inviteCode}>{groupQ.data?.invite_code}</Text>
           <Pressable style={styles.shareBtn} onPress={handleShareInviteCode}>
             <Text style={styles.shareBtnText}>📋 Chia sẻ mã mời</Text>
+          </Pressable>
+          {/* MVP-08 / L3: chỉ chủ nhóm đổi được mã mời */}
+          {isOwner && (
+            <Pressable
+              style={[styles.rotateBtn, rotateMutation.isPending && styles.createBtnDisabled]}
+              disabled={rotateMutation.isPending}
+              onPress={() => {
+                Alert.alert(
+                  'Đổi mã mời',
+                  'Mã mời và mã QR cũ sẽ không còn dùng được. Bạn có chắc?',
+                  [
+                    { text: 'Hủy', style: 'cancel' },
+                    { text: 'Đổi mã', style: 'destructive', onPress: () => rotateMutation.mutate() },
+                  ]
+                );
+              }}
+            >
+              <Text style={styles.rotateBtnText}>🔄 Đổi mã mời</Text>
+            </Pressable>
+          )}
+          <Pressable style={styles.scanNavBtn} onPress={() => router.push('/scan' as any)}>
+            <Text style={styles.scanNavBtnText}>📷 Quét mã QR</Text>
           </Pressable>
         </View>
 
@@ -123,6 +225,35 @@ export default function InviteScreen() {
             )}
           </Pressable>
         </View>
+
+        {/* Invite friends */}
+        {availableFriends.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Mời bạn bè</Text>
+            {availableFriends.map((friend) => (
+              <View key={friend.id} style={styles.friendRow}>
+                <Avatar name={friend.display_name} path={friend.avatar_path} seed={friend.id} size={36} />
+                <View style={styles.friendInfo}>
+                  <Text style={styles.friendName}>{friend.display_name}</Text>
+                  <Text style={styles.friendCode}>{friend.user_code}</Text>
+                </View>
+                {invitedIds.has(friend.id) ? (
+                  <View style={styles.invitedBadge}>
+                    <Text style={styles.invitedText}>Đã mời</Text>
+                  </View>
+                ) : (
+                  <Pressable
+                    style={styles.inviteFriendBtn}
+                    onPress={() => inviteFriendMutation.mutate(friend.id)}
+                    disabled={inviteFriendMutation.isPending}
+                  >
+                    <Text style={styles.inviteFriendBtnText}>Mời</Text>
+                  </Pressable>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Active invites */}
         <View style={styles.card}>
@@ -152,6 +283,12 @@ export default function InviteScreen() {
                 <View style={styles.inviteActions}>
                   <Pressable
                     style={styles.inviteShareBtn}
+                    onPress={() => setQrModalToken(invite.token)}
+                  >
+                    <Text style={styles.inviteShareBtnText}>🔳</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.inviteShareBtn}
                     onPress={() => handleShareInviteLink(invite.token)}
                   >
                     <Text style={styles.inviteShareBtnText}>📤</Text>
@@ -168,6 +305,33 @@ export default function InviteScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* QR Code Modal for invite links */}
+      <Modal
+        visible={!!qrModalToken}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQrModalToken(null)}
+      >
+        <Pressable style={styles.qrModalOverlay} onPress={() => setQrModalToken(null)}>
+          <View style={styles.qrModalContent}>
+            <Text style={styles.qrModalTitle}>Mã QR liên kết mời</Text>
+            {qrModalToken && (
+              <QRCode
+                value={inviteLink(qrModalToken)}
+                size={200}
+                backgroundColor="#fff"
+              />
+            )}
+            <Text style={styles.qrModalHint}>
+              Bạn bè quét mã này để tham gia nhóm
+            </Text>
+            <Pressable style={styles.qrModalClose} onPress={() => setQrModalToken(null)}>
+              <Text style={styles.qrModalCloseText}>Đóng</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -204,6 +368,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   shareBtnText: { fontSize: 15, color: '#007AFF', fontWeight: '500' },
+  rotateBtn: {
+    backgroundColor: '#FFF3E0',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  rotateBtnText: { fontSize: 15, color: '#FF9500', fontWeight: '500' },
   createBtn: {
     backgroundColor: '#007AFF',
     borderRadius: 12,
@@ -235,4 +406,63 @@ const styles = StyleSheet.create({
     borderColor: '#FF3B30',
   },
   revokeBtnText: { fontSize: 12, color: '#FF3B30', fontWeight: '500' },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
+    gap: 10,
+  },
+  friendInfo: { flex: 1 },
+  friendName: { fontSize: 15, fontWeight: '500', color: '#1a1a1a' },
+  friendCode: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
+  inviteFriendBtn: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  inviteFriendBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  invitedBadge: {
+    backgroundColor: '#f2f2f7',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  invitedText: { color: '#8E8E93', fontSize: 13, fontWeight: '500' },
+  qrCenter: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  scanNavBtn: {
+    backgroundColor: '#f2f2f7',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  scanNavBtnText: { fontSize: 15, color: '#007AFF', fontWeight: '500' },
+  qrModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  qrModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+    gap: 16,
+    marginHorizontal: 32,
+  },
+  qrModalTitle: { fontSize: 17, fontWeight: '600', color: '#1a1a1a' },
+  qrModalHint: { fontSize: 14, color: '#8E8E93', textAlign: 'center' },
+  qrModalClose: {
+    backgroundColor: '#f2f2f7',
+    borderRadius: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+  },
+  qrModalCloseText: { fontSize: 15, color: '#007AFF', fontWeight: '500' },
 });

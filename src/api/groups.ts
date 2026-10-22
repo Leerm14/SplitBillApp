@@ -13,6 +13,8 @@ export type Group = {
   owner_id: string;
   invite_code: string;
   simplify_debts: boolean | null; // APP-06: NULL = bật (BR-09)
+  /** MVP-03: public_id Cloudinary của ảnh nhóm (`<group_id>/group_<ts>`) */
+  avatar_path?: string | null;
   currency: string;
   status: string;
   created_at: string;
@@ -35,6 +37,8 @@ export type GroupMember = {
   role: string;
   joinedAt: string;
   status?: string;
+  /** MVP-02: public_id Cloudinary ảnh đại diện */
+  avatarPath?: string | null;
 };
 
 /**
@@ -45,7 +49,7 @@ export type GroupMember = {
 export async function fetchGroups(userId: string): Promise<GroupWithRole[]> {
   const { data, error, status } = await supabase
     .from('group_members')
-    .select('group_id, role, status, groups:group_id(id, name, invite_code, created_at, status, owner_id, simplify_debts)')
+    .select('group_id, role, status, groups:group_id(id, name, invite_code, created_at, status, owner_id, simplify_debts, avatar_path)')
     .eq('user_id', userId)
     .order('joined_at', { ascending: false });
 
@@ -80,7 +84,7 @@ export async function fetchGroup(groupId: string): Promise<Group> {
 export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]> {
   const { data, error, status } = await supabase
     .from('group_members')
-    .select('user_id, role, joined_at, status, profiles:user_id(id, display_name)')
+    .select('user_id, role, joined_at, status, profiles:user_id(id, display_name, avatar_path)')
     .eq('group_id', groupId)
     .order('joined_at');
 
@@ -95,6 +99,7 @@ export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]>
     role: gm.role,
     joinedAt: gm.joined_at,
     status: gm.status,
+    avatarPath: gm.profiles?.avatar_path ?? null,
   })).filter((m: any) => {
     if (seen.has(m.id)) return false;
     seen.add(m.id);
@@ -171,10 +176,21 @@ export async function fetchMyGroupBalances(userId: string): Promise<MyGroupBalan
   }));
 }
 
-export async function createGroup(name: string) {
-  const { data, error, status } = await supabase.rpc('create_group', { _name: name });
+/**
+ * MVP-03: Tạo nhóm trong MỘT lần gọi RPC (atomic): tên, mô tả, công tắc đơn giản hóa công nợ
+ * (mặc định bật — BR-09). Ảnh nhóm upload sau khi đã có id nhóm rồi lưu bằng updateGroup.
+ */
+export async function createGroup(
+  name: string,
+  opts: { description?: string; simplifyDebts?: boolean } = {},
+): Promise<Group> {
+  const { data, error, status } = await supabase.rpc('create_group', {
+    _name: name,
+    _description: opts.description ?? '',
+    _simplify_debts: opts.simplifyDebts ?? true,
+  });
   if (error) throwApiError(error, status);
-  return data;
+  return (Array.isArray(data) ? data[0] : data) as Group;
 }
 
 export async function joinGroup(code: string) {
@@ -186,16 +202,22 @@ export async function joinGroup(code: string) {
 /**
  * NEW-08: update_group coi tham số NULL là giữ nguyên. Chỉ truyền trường đã đổi
  * (ví dụ công tắc trên màn công nợ chỉ gửi simplify_debts).
+ * MVP-03: avatar_path phải bắt đầu bằng `<group_id>/`; clear_avatar = xóa ảnh nhóm.
  */
-export async function updateGroup(groupId: string, updates: { name?: string; description?: string; simplify_debts?: boolean }) {
+export async function updateGroup(
+  groupId: string,
+  updates: { name?: string; description?: string; simplify_debts?: boolean; avatar_path?: string; clear_avatar?: boolean },
+): Promise<Group> {
   const { data, error, status } = await supabase.rpc('update_group', {
     _group_id: groupId,
     _name: updates.name ?? null,
     _description: updates.description ?? null,
     _simplify_debts: updates.simplify_debts ?? null,
+    _avatar_path: updates.avatar_path ?? null,
+    _clear_avatar: updates.clear_avatar ?? false,
   });
   if (error) throwApiError(error, status);
-  return data;
+  return (Array.isArray(data) ? data[0] : data) as Group;
 }
 
 export async function createInvite(groupId: string, opts?: { invitedUserId?: string; expiresHours?: number; maxUses?: number }) {
@@ -246,6 +268,13 @@ export async function acceptInvite(token: string) {
   return data;
 }
 
+/** MVP-06: Chấp nhận lời mời đích danh (thông báo GROUP_INVITED) — chỉ người được mời. Trả dòng nhóm. */
+export async function acceptInviteById(inviteId: string): Promise<Group> {
+  const { data, error, status } = await supabase.rpc('accept_invite_by_id', { _invite_id: inviteId });
+  if (error) throwApiError(error, status);
+  return (Array.isArray(data) ? data[0] : data) as Group;
+}
+
 export async function removeMember(groupId: string, userId: string) {
   const { data, error, status } = await supabase.rpc('remove_member', { _group_id: groupId, _user_id: userId });
   if (error) throwApiError(error, status);
@@ -266,6 +295,12 @@ export async function leaveGroup(groupId: string) {
 
 export async function closeGroup(groupId: string) {
   const { data, error, status } = await supabase.rpc('close_group', { _group_id: groupId });
+  if (error) throwApiError(error, status);
+  return data;
+}
+
+export async function rotateInviteCode(groupId: string) {
+  const { data, error, status } = await supabase.rpc('rotate_invite_code', { _group_id: groupId });
   if (error) throwApiError(error, status);
   return data;
 }

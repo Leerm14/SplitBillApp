@@ -4,7 +4,6 @@ import React from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,7 +13,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { fetchProfile, getAvatarUrl } from '@/api/profiles';
+import { fetchProfile } from '@/api/profiles';
+import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function AccountScreen() {
@@ -49,18 +49,13 @@ export default function AccountScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
         {/* Profile card */}
         <View style={styles.profileCard}>
-          {profile?.avatar_path ? (
-            <Image
-              source={{ uri: getAvatarUrl(profile.avatar_path) }}
-              style={styles.avatarImage}
-            />
-          ) : (
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {(profile?.display_name || user?.user_metadata?.display_name || user?.email || '?')[0].toUpperCase()}
-              </Text>
-            </View>
-          )}
+          <Avatar
+            name={profile?.display_name || user?.user_metadata?.display_name || user?.email}
+            path={profile?.avatar_path}
+            seed={profile?.id ?? user?.id}
+            size={64}
+            style={styles.avatar}
+          />
           <Text style={styles.name}>
             {profile?.display_name || user?.user_metadata?.display_name || 'Người dùng'}
           </Text>
@@ -95,6 +90,14 @@ export default function AccountScreen() {
             <Text style={styles.menuItemText}>Quyền riêng tư</Text>
             <Text style={styles.chevron}>›</Text>
           </Pressable>
+          <View style={styles.menuDivider} />
+          <Pressable
+            style={styles.menuItem}
+            onPress={() => router.push('/account/payment-methods' as any)}
+          >
+            <Text style={styles.menuItemText}>Phương thức thanh toán</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
         </View>
 
         {/* Sign out */}
@@ -126,22 +129,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  avatarImage: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    marginBottom: 8,
-  },
-  avatarText: { fontSize: 28, fontWeight: '700', color: '#fff' },
+  avatar: { marginBottom: 8 },
   name: { fontSize: 20, fontWeight: '600', color: '#1a1a1a' },
   email: { fontSize: 14, color: '#8E8E93' },
   userCode: { fontSize: 13, color: '#8E8E93', marginTop: 2 },

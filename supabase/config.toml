@@ -13,3 +13,7 @@ verify_jwt = true
 
 [functions.delete-account]
 verify_jwt = true
+
+# MVP-00: Ký upload ảnh lên Cloudinary. Cần JWT của người dùng để kiểm tra quyền.
+[functions.cloudinary-sign]
+verify_jwt = true

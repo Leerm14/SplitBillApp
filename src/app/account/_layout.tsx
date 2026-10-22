@@ -13,6 +13,7 @@ export default function AccountLayout() {
       <Stack.Screen name="profile" options={{ title: 'Hồ sơ' }} />
       <Stack.Screen name="security" options={{ title: 'Bảo mật' }} />
       <Stack.Screen name="privacy" options={{ title: 'Quyền riêng tư' }} />
+      <Stack.Screen name="payment-methods" options={{ title: 'Phương thức thanh toán' }} />
     </Stack>
   );
 }

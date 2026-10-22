@@ -16,16 +16,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { createGroup, joinGroup } from '@/api/groups';
+import { joinGroup } from '@/api/groups';
+import { Avatar } from '@/components/avatar';
 import { ErrorState } from '@/components/error-state';
 import { useGroupsList } from '@/hooks/use-groups';
 
 export default function GroupsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [showCreate, setShowCreate] = useState(false);
   const [showJoin, setShowJoin] = useState(false);
-  const [groupName, setGroupName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -35,25 +34,6 @@ export default function GroupsScreen() {
     { key: 'active', title: null as string | null, data: activeGroups },
     ...(archivedGroups.length > 0 ? [{ key: 'archived', title: 'Đã lưu trữ', data: archivedGroups }] : []),
   ];
-
-  const handleCreateGroup = async () => {
-    if (!groupName.trim()) {
-      Alert.alert('Lỗi', 'Vui lòng nhập tên nhóm');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const group = await createGroup(groupName.trim());
-      queryClient.invalidateQueries({ queryKey: ['groups'] });
-      setShowCreate(false);
-      setGroupName('');
-      router.push(`/group/${group.id}` as any);
-    } catch (err: any) {
-      Alert.alert('Lỗi', toUserMessage(err, 'Không thể tạo nhóm'));
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleJoinGroup = async () => {
     if (!inviteCode.trim()) {
@@ -84,13 +64,21 @@ export default function GroupsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      {/* Action buttons */}
+      {/* Action buttons — MVP-03: nút "Tạo nhóm" mở màn hình mới thay vì modal */}
       <View style={styles.actions}>
-        <Pressable style={styles.actionBtn} onPress={() => setShowCreate(true)}>
+        <Pressable style={styles.actionBtn} onPress={() => router.push('/group/new' as any)}>
           <Text style={styles.actionBtnText}>+ Tạo nhóm</Text>
         </Pressable>
         <Pressable style={[styles.actionBtn, styles.actionBtnSecondary]} onPress={() => setShowJoin(true)}>
           <Text style={[styles.actionBtnText, styles.actionBtnTextSecondary]}>Nhập mã mời</Text>
+        </Pressable>
+        {/* MVP-04: quét QR mời nhóm */}
+        <Pressable
+          style={[styles.actionBtn, styles.actionBtnSecondary, styles.scanBtn]}
+          onPress={() => router.push('/scan' as any)}
+          accessibilityLabel="Quét mã QR"
+        >
+          <Text style={[styles.actionBtnText, styles.actionBtnTextSecondary]}>📷</Text>
         </Pressable>
       </View>
 
@@ -132,6 +120,7 @@ export default function GroupsScreen() {
                 style={[styles.card, archived && styles.cardArchived]}
                 onPress={() => router.push(`/group/${item.id}` as any)}
               >
+                <Avatar name={item.name} path={item.avatar_path} seed={item.id} size={44} style={styles.groupAvatar} />
                 <View style={styles.cardInfo}>
                   <Text style={styles.groupName}>{item.name}</Text>
                   <Text style={styles.groupMeta}>
@@ -146,39 +135,6 @@ export default function GroupsScreen() {
           }}
         />
       )}
-
-      {/* Modal tạo nhóm */}
-      <Modal visible={showCreate} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Tạo nhóm mới</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Tên nhóm"
-              placeholderTextColor="#999"
-              value={groupName}
-              onChangeText={setGroupName}
-              autoFocus
-            />
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => { setShowCreate(false); setGroupName(''); }}>
-                <Text style={styles.modalCancelText}>Hủy</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.modalConfirm, submitting && styles.buttonDisabled]}
-                onPress={handleCreateGroup}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.modalConfirmText}>Tạo</Text>
-                )}
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Modal tham gia nhóm */}
       <Modal visible={showJoin} transparent animationType="slide">
@@ -262,6 +218,8 @@ const styles = StyleSheet.create({
   },
   cardArchived: { opacity: 0.7 },
   cardInfo: { flex: 1 },
+  groupAvatar: { marginRight: 12 },
+  scanBtn: { flex: 0, paddingHorizontal: 16 },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: '#8E8E93', marginTop: 12, marginBottom: 4 },
   groupName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
   groupMeta: { fontSize: 13, color: '#8E8E93', marginTop: 2 },

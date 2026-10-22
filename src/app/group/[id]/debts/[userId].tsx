@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
 import { ErrorState } from '@/components/error-state';
+import { RecipientPaymentHandles } from '@/components/payment-handles';
 import { explainDebt, type ExpenseContribution } from '@/domain/explain';
 import { formatVND } from '@/domain/money';
 import { useAuth } from '@/hooks/use-auth';
@@ -258,6 +259,14 @@ export default function DebtDetailScreen() {
           </View>
         )}
 
+        {/* MVP-07: mình đang nợ → phương thức thanh toán của người nhận, có nút sao chép */}
+        {direction !== 'settled' && debtor === user?.id && explanation.amount > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.handlesTitle}>Chuyển cho {getName(creditor)}</Text>
+            <RecipientPaymentHandles userId={creditor} name={getName(creditor)} />
+          </View>
+        )}
+
         {/* Nút thanh toán */}
         {canWrite && direction !== 'settled' && debtor === user?.id && explanation.amount > 0 && (
           <Pressable
@@ -277,6 +286,7 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 12, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { fontSize: 16, color: '#666' },
+  handlesTitle: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
 
   card: {
     backgroundColor: '#fff',

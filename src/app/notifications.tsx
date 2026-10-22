@@ -7,11 +7,14 @@ import {
   SectionList,
   RefreshControl,
   ActivityIndicator,
+  Alert,
   SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
+import { toUserMessage } from '@/api/errors';
+import { acceptInviteById } from '@/api/groups';
 import { useAuth } from '@/hooks/use-auth';
 import {
   fetchNotifications,
@@ -36,6 +39,7 @@ const NOTIFICATION_MAP: Record<string, { icon: string; title: string }> = {
   MEMBER_JOINED: { icon: '👋', title: 'Thành viên mới' },
   MEMBER_REMOVED: { icon: '👤', title: 'Thành viên bị xóa' },
   INVITE_CREATED: { icon: '🔗', title: 'Lời mời tham gia nhóm' },
+  GROUP_INVITED: { icon: '📨', title: 'Bạn được mời vào nhóm' },
   INVITE_ACCEPTED: { icon: '✅', title: 'Lời mời đã chấp nhận' },
   GROUP_UPDATED: { icon: '⚙️', title: 'Nhóm đã cập nhật' },
   SUGGESTION_CHANGED: { icon: '💡', title: 'Gợi ý tất toán thay đổi' },
@@ -134,10 +138,44 @@ export default function NotificationsScreen() {
       .map((key) => ({ title: key, data: groups[key] }));
   }, [notifications]);
 
+  /** MVP-06: lời mời đích danh — hỏi xác nhận rồi accept_invite_by_id và vào nhóm */
+  const acceptMutation = useMutation({
+    mutationFn: (inviteId: string) => acceptInviteById(inviteId),
+    onSuccess: (group) => {
+      queryClient.invalidateQueries({ queryKey: ['groups'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      if (group?.id) router.push(`/group/${group.id}` as any);
+    },
+    onError: (err) => {
+      Alert.alert('Không thể tham gia', toUserMessage(err, 'Lời mời không còn hiệu lực.'));
+    },
+  });
+
+  const confirmInvite = useCallback(
+    (item: NotificationItem) => {
+      if (!item.invite_id) {
+        Alert.alert('Lời mời', 'Lời mời này không còn thông tin để tham gia.');
+        return;
+      }
+      const inviteId = item.invite_id;
+      const groupName = item.group?.name ? `"${item.group.name}"` : 'nhóm này';
+      Alert.alert('Tham gia nhóm', `Bạn được mời vào ${groupName}. Tham gia ngay?`, [
+        { text: 'Để sau', style: 'cancel' },
+        { text: 'Tham gia', onPress: () => acceptMutation.mutate(inviteId) },
+      ]);
+    },
+    [acceptMutation],
+  );
+
   const handlePress = useCallback(
     (item: NotificationItem) => {
       if (!item.read_at) {
         markReadMutation.mutate(item.id);
+      }
+      if (item.type === 'GROUP_INVITED') {
+        // Chưa là thành viên nên không mở thẳng màn nhóm được
+        confirmInvite(item);
+        return;
       }
       if (item.expense_id && item.group_id) {
         router.push(`/group/${item.group_id}/expense/${item.expense_id}` as any);
@@ -147,7 +185,7 @@ export default function NotificationsScreen() {
         router.push(`/group/${item.group_id}` as any);
       }
     },
-    [markReadMutation, router],
+    [markReadMutation, router, confirmInvite],
   );
 
   const renderItem = useCallback(

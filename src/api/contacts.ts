@@ -51,6 +51,17 @@ export async function searchUsers(query: string): Promise<UserSearchResult[]> {
   return (data ?? []) as UserSearchResult[];
 }
 
+/**
+ * MVP-05: Tìm đúng một người theo user_code (quét QR kết bạn). Khớp chính xác mã, KHÔNG lọc
+ * `searchable` (người tắt tìm kiếm vẫn cho người khác quét QR của mình). Null nếu không có.
+ */
+export async function fetchUserByCode(code: string): Promise<ContactProfile | null> {
+  const { data, error, status } = await supabase.rpc('find_user_by_code', { _code: code });
+  if (error) throwApiError(error, status);
+  const rows = (Array.isArray(data) ? data : data ? [data] : []) as ContactProfile[];
+  return rows[0] ?? null;
+}
+
 /** Get friends list (ACCEPTED status) */
 export async function fetchFriends(): Promise<Friendship[]> {
   const userId = (await supabase.auth.getUser()).data.user?.id;
@@ -133,6 +144,17 @@ export async function fetchPaymentHandles(userId?: string): Promise<PaymentHandl
   return (data ?? []) as PaymentHandle[];
 }
 
+/** MVP-07: display_text 1..200 ký tự (ràng buộc DB). */
+export const PAYMENT_HANDLE_MAX_LENGTH = 200;
+
+/** Chuẩn hóa nội dung phương thức thanh toán; ném lỗi tiếng Việt nếu rỗng / quá dài. */
+export function normalizePaymentHandleText(text: string): string {
+  const t = text.trim();
+  if (t.length === 0) throw new Error('Vui lòng nhập thông tin thanh toán');
+  if (t.length > PAYMENT_HANDLE_MAX_LENGTH) throw new Error(`Tối đa ${PAYMENT_HANDLE_MAX_LENGTH} ký tự`);
+  return t;
+}
+
 /** Add payment handle */
 export async function addPaymentHandle(type: string, displayText: string): Promise<PaymentHandle> {
   const userId = (await supabase.auth.getUser()).data.user?.id;
@@ -140,7 +162,20 @@ export async function addPaymentHandle(type: string, displayText: string): Promi
 
   const { data, error, status } = await supabase
     .from('payment_handles')
-    .insert({ user_id: userId, type, display_text: displayText })
+    .insert({ user_id: userId, type, display_text: normalizePaymentHandleText(displayText) })
+    .select()
+    .single();
+
+  if (error) throwApiError(error, status);
+  return data as PaymentHandle;
+}
+
+/** MVP-07: Sửa phương thức thanh toán của chính mình (policy chỉ cho chủ dòng). */
+export async function updatePaymentHandle(handleId: string, type: string, displayText: string): Promise<PaymentHandle> {
+  const { data, error, status } = await supabase
+    .from('payment_handles')
+    .update({ type, display_text: normalizePaymentHandleText(displayText) })
+    .eq('id', handleId)
     .select()
     .single();
 

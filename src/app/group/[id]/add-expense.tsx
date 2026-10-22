@@ -16,9 +16,10 @@ import {
 } from 'react-native';
 
 import { toUserMessage } from '@/api/errors';
-import type { ExpenseShareInput } from '@/api/expenses';
+import { compressReceipt, type ExpenseShareInput } from '@/api/expenses';
 import { isActiveMember } from '@/api/groups';
 import { ErrorState } from '@/components/error-state';
+import { ReceiptPicker } from '@/components/receipt-image';
 import { formatVND, parseVND } from '@/domain/money';
 import {
   bpToPercentText,
@@ -31,6 +32,8 @@ import {
 } from '@/domain/split';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupAccess } from '@/hooks/use-group-settlement';
+import { persistReceiptCopy } from '@/lib/receipt-files';
+import { buildReceiptPath } from '@/lib/receipt-path';
 import { submitAction } from '@/offline';
 
 type SplitMode = 'EQUAL' | 'PERCENT' | 'EXACT';
@@ -59,6 +62,10 @@ export default function AddExpenseScreen() {
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [percentInputs, setPercentInputs] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // MVP-01: Ảnh hóa đơn (uri trên máy, chưa upload)
+  const [receiptUri, setReceiptUri] = useState<string | null>(null);
+  // MVP-01 / L7: đường dẫn ảnh tạo MỘT lần cho mỗi form — gửi lại (upsert) không tạo ảnh mồ côi
+  const receiptPathRef = useRef<string | null>(null);
   // APP-07: idempotency key giữ theo form, chỉ đổi khi đã lưu
   const idempotencyKeyRef = useRef(Crypto.randomUUID());
   // APP-07: chặn bấm hai lần bằng ref đồng bộ
@@ -152,6 +159,27 @@ export default function AddExpenseScreen() {
     submittingRef.current = true;
     setSubmitting(true);
     const currentKey = idempotencyKeyRef.current;
+
+    // MVP-01: nén ảnh và chép vào thư mục tài liệu; hàng đợi upload (upsert) rồi mới gọi create_expense,
+    // nên mất mạng vẫn lưu được và tự gửi ảnh khi có mạng
+    let receiptPath: string | undefined;
+    let localReceiptUri: string | undefined;
+    if (receiptUri) {
+      try {
+        if (!receiptPathRef.current) {
+          receiptPathRef.current = buildReceiptPath(groupId, Crypto.randomUUID(), Crypto.randomUUID());
+        }
+        localReceiptUri = await persistReceiptCopy(await compressReceipt(receiptUri));
+        receiptPath = receiptPathRef.current;
+      } catch (err) {
+        console.warn('[AddExpense] receipt prepare failed:', (err as Error)?.message);
+        Alert.alert('Lỗi', 'Không đọc được ảnh hóa đơn. Hãy chọn ảnh khác hoặc xóa ảnh.');
+        submittingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+    }
+
     try {
       // APP-08: ghi hàng đợi trước (kèm key), rồi gửi ngay
       const res = await submitAction(
@@ -165,16 +193,26 @@ export default function AddExpenseScreen() {
           idempotencyKey: currentKey,
           splitMethod: splitMode,
           note: note.trim(),
+          receiptPath,
+          localReceiptUri,
         },
         currentKey,
         user.id,
       );
-      // APP-07: Reset key sau khi đã lưu
+      // APP-07: Reset key (và đường dẫn ảnh) sau khi đã lưu
       idempotencyKeyRef.current = Crypto.randomUUID();
+      receiptPathRef.current = null;
       queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       if (res.status === 'queued') {
-        Alert.alert('Chưa đồng bộ', 'Chưa gửi được do mất kết nối. Khoản chi đã được lưu và sẽ tự gửi khi có mạng.');
+        Alert.alert(
+          'Chưa đồng bộ',
+          receiptPath
+            ? 'Chưa gửi được do mất kết nối. Khoản chi và ảnh hóa đơn đã được lưu trên máy và sẽ tự gửi khi có mạng.'
+            : 'Chưa gửi được do mất kết nối. Khoản chi đã được lưu và sẽ tự gửi khi có mạng.',
+        );
+      } else if (receiptPath && !(res.result as { receipt_path?: string | null } | null)?.receipt_path) {
+        Alert.alert('Đã lưu khoản chi', 'Không tải được ảnh hóa đơn lên. Bạn có thể thêm lại ảnh ở màn sửa khoản chi.');
       }
       router.back();
     } catch (err: any) {
@@ -257,6 +295,17 @@ export default function AddExpenseScreen() {
           placeholderTextColor="#999"
           value={note}
           onChangeText={setNote}
+        />
+
+
+        {/* MVP-01: Ảnh hóa đơn */}
+        <Text style={styles.label}>Ảnh hóa đơn</Text>
+        <ReceiptPicker
+          localUri={receiptUri}
+          remoteUrl={null}
+          disabled={submitting}
+          onPicked={setReceiptUri}
+          onRemove={() => setReceiptUri(null)}
         />
 
         {/* Người trả */}

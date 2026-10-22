@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useRef, useState } from 'react';
 import {
@@ -15,9 +16,17 @@ import {
 } from 'react-native';
 
 import { isVersionConflict, toUserMessage } from '@/api/errors';
-import { fetchExpense, updateExpense, type Expense, type ExpenseShareInput } from '@/api/expenses';
+import {
+  compressReceipt,
+  fetchExpense,
+  updateExpense,
+  uploadReceiptFile,
+  type Expense,
+  type ExpenseShareInput,
+} from '@/api/expenses';
 import { isActiveMember, type GroupMember } from '@/api/groups';
 import { ErrorState } from '@/components/error-state';
+import { ReceiptPicker } from '@/components/receipt-image';
 import { formatVND, parseVND } from '@/domain/money';
 import {
   bpToPercentText,
@@ -30,6 +39,8 @@ import {
 } from '@/domain/split';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupAccess } from '@/hooks/use-group-settlement';
+import { useReceiptUrl } from '@/hooks/use-receipt-url';
+import { buildReceiptPath, resolveReceiptPathForUpdate } from '@/lib/receipt-path';
 
 type SplitMode = 'EQUAL' | 'PERCENT' | 'EXACT';
 
@@ -177,6 +188,14 @@ function EditExpenseForm({
   const submittingRef = useRef(false);
   const version = expense.version ?? 1;
 
+  // MVP-01: ảnh hóa đơn — thêm / thay / xóa
+  const [newReceiptUri, setNewReceiptUri] = useState<string | null>(null);
+  const [receiptRemoved, setReceiptRemoved] = useState(false);
+  // L7: đường dẫn ảnh mới tạo MỘT lần cho form (thư mục = id khoản chi) → upload lại dùng upsert
+  const newReceiptPathRef = useRef<string | null>(null);
+  const existingReceipt = receiptRemoved ? null : expense.receipt_path;
+  const receiptUrlQ = useReceiptUrl(existingReceipt);
+
   const amount = parseVND(amountText) ?? 0;
   const isAmountValid = amount > 0;
   const selectedIds = useMemo(() => [...selectedMembers], [selectedMembers]);
@@ -256,6 +275,19 @@ function EditExpenseForm({
     submittingRef.current = true;
     setSubmitting(true);
     try {
+      // MVP-01: ảnh mới → nén + upload (upsert) trước; update_expense ghi đè receipt_path nên luôn gửi rõ giá trị
+      let uploadedPath: string | null = null;
+      if (newReceiptUri) {
+        if (!newReceiptPathRef.current) {
+          newReceiptPathRef.current = buildReceiptPath(groupId, expenseId, Crypto.randomUUID());
+        }
+        uploadedPath = await uploadReceiptFile(newReceiptPathRef.current, await compressReceipt(newReceiptUri));
+      }
+      const receiptPath = resolveReceiptPathForUpdate({
+        existing: expense.receipt_path ?? null,
+        uploadedPath,
+        removed: receiptRemoved,
+      });
       await updateExpense({
         expenseId,
         expectedVersion: version,
@@ -265,8 +297,7 @@ function EditExpenseForm({
         splitMethod: splitMode,
         note: note.trim(),
         shares: finalShares,
-        // RPC update_expense ghi đè receipt_path — gửi lại ảnh hóa đơn hiện có để không bị xóa
-        receiptPath: expense.receipt_path ?? undefined,
+        receiptPath,
       });
       queryClient.invalidateQueries({ queryKey: ['expense', expenseId] });
       queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
@@ -351,6 +382,21 @@ function EditExpenseForm({
           placeholderTextColor="#999"
           value={note}
           onChangeText={setNote}
+        />
+
+        {/* MVP-01: Ảnh hóa đơn — thêm / thay / xóa */}
+        <Text style={styles.label}>Ảnh hóa đơn</Text>
+        <ReceiptPicker
+          localUri={newReceiptUri}
+          remoteUrl={receiptUrlQ.data ?? null}
+          remoteLoading={!!existingReceipt && receiptUrlQ.isLoading}
+          remoteError={!!existingReceipt && receiptUrlQ.isError}
+          disabled={submitting}
+          onPicked={(uri) => setNewReceiptUri(uri)}
+          onRemove={() => {
+            setNewReceiptUri(null);
+            setReceiptRemoved(true);
+          }}
         />
 
         {/* Người trả */}

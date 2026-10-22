@@ -168,6 +168,8 @@ const CODE_MESSAGES: Record<string, string> = {
   INVALID_AVATAR_PATH: 'Ảnh đại diện không hợp lệ.',
   ACCOUNT_DELETED: 'Tài khoản này đã bị xóa.',
   OWNER_OF_ACTIVE_GROUP: 'Bạn đang là chủ một nhóm. Hãy chuyển quyền chủ nhóm trước khi xóa tài khoản.',
+  // MVP-00 / MVP-01: upload ảnh
+  UPLOAD_FAILED: 'Không upload được ảnh. Vui lòng thử lại.',
 };
 
 /** Câu báo lỗi cho người dùng: ưu tiên mã server → tiếng Việt; lỗi mạng; cuối cùng là message gốc. */
