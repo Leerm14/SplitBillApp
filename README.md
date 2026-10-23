@@ -1,56 +1,147 @@
-# Welcome to your Expo app 👋
+# SplitBill 💰
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Ứng dụng chia tiền nhóm được xây dựng bằng [Expo](https://expo.dev) + React Native, sử dụng [Supabase](https://supabase.com) làm backend và [Cloudinary](https://cloudinary.com) để lưu trữ ảnh.
 
-## Get started
+## Yêu cầu hệ thống
 
-1. Install dependencies
+- **Node.js** >= 18
+- **npm** (đi kèm Node.js)
+- **Expo Go** trên điện thoại ([Android](https://play.google.com/store/apps/details?id=host.exp.exponent) / [iOS](https://apps.apple.com/app/expo-go/id982107779)) — để test nhanh
+- (Tùy chọn) Android Emulator hoặc iOS Simulator — để chạy development build
 
-   ```bash
-   npm install
-   ```
+## Bắt đầu
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+### 1. Clone dự án
 
 ```bash
-npm run reset-project
+git clone <repo-url>
+cd SplitBillApp
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+### 2. Cài đặt dependencies
 
-### Other setup steps
+```bash
+npm install
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+### 3. Cấu hình biến môi trường
 
-## Learn more
+Tạo file `.env` trong thư mục `SplitBillApp` (file này không được commit lên Git):
 
-To learn more about developing your project with Expo, look at the following resources:
+```env
+EXPO_PUBLIC_SUPABASE_URL=<supabase_url>
+EXPO_PUBLIC_SUPABASE_ANON_KEY=<supabase_anon_key>
+EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME=<cloudinary_cloud_name>
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+> **Lưu ý:** Liên hệ team để lấy giá trị các biến môi trường.
 
-## Join the community
+### 4. Chạy ứng dụng
 
-Join our community of developers creating universal apps.
+```bash
+npx expo start
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Sau khi chạy, terminal sẽ hiện QR code và các tùy chọn:
+
+| Phím | Hành động                  |
+| ---- | -------------------------- |
+| `a`  | Mở trên Android Emulator  |
+| `i`  | Mở trên iOS Simulator     |
+| `w`  | Mở trên trình duyệt web   |
+
+Hoặc mở app **Expo Go** trên điện thoại → quét QR code để chạy trực tiếp.
+
+## Chạy trên thiết bị thật (Development Build)
+
+Nếu cần sử dụng đầy đủ native module (camera, notifications, ...), bạn cần tạo development build:
+
+```bash
+# Android
+npx expo run:android
+
+# iOS (yêu cầu macOS + Xcode)
+npx expo run:ios
+```
+
+## Chạy bằng Android Studio
+
+Nếu muốn mở project trực tiếp bằng Android Studio thay vì dùng VS Code, cần thực hiện **2 bước đồng thời**:
+
+### Bước 1: Chạy Metro bundler
+
+Mở terminal (CMD, PowerShell, hoặc terminal trong Android Studio), chạy:
+
+```bash
+cd SplitBillApp
+npx expo start
+```
+
+> **Quan trọng:** Metro bundler phải chạy nền trong suốt quá trình phát triển. Đây là server serve code JavaScript cho app — không thể bỏ qua.
+
+### Bước 2: Mở và chạy project trong Android Studio
+
+1. Mở **Android Studio**
+2. Chọn **File → Open** → trỏ đến thư mục `SplitBillApp/android`
+3. Đợi **Gradle sync** hoàn tất
+4. Chọn emulator hoặc kết nối thiết bị thật
+5. Nhấn **▶ Run** để build và cài app
+
+> **Lưu ý:** React Native / Expo không giống app Android thuần. Code chính viết bằng TypeScript/JavaScript, Android Studio chỉ build phần native shell. Cả Metro bundler và Android Studio phải chạy đồng thời để app hoạt động.
+
+## Các lệnh hữu ích
+
+| Lệnh                      | Mô tả                                  |
+| -------------------------- | --------------------------------------- |
+| `npm start`                | Khởi chạy Expo dev server              |
+| `npm run android`          | Build và chạy trên Android             |
+| `npm run ios`              | Build và chạy trên iOS                 |
+| `npm run web`              | Chạy trên trình duyệt                  |
+| `npm test`                 | Chạy unit test                         |
+| `npm run test:watch`       | Chạy unit test ở chế độ watch          |
+| `npm run test:coverage`    | Chạy unit test với báo cáo coverage    |
+| `npm run lint`             | Kiểm tra lỗi code với ESLint          |
+| `npm run test:db`          | Chạy test database (Supabase)          |
+
+## Cấu trúc dự án
+
+```
+SplitBillApp/
+├── src/                # Mã nguồn chính
+│   └── app/            # Các màn hình (file-based routing)
+├── assets/             # Hình ảnh, font, ...
+├── supabase/           # Supabase migrations & edge functions
+├── scripts/            # Scripts hỗ trợ
+├── android/            # Native Android project
+├── app.json            # Cấu hình Expo
+├── tsconfig.json       # Cấu hình TypeScript
+└── package.json        # Dependencies & scripts
+```
+
+## Tài liệu tham khảo
+
+- [Expo Documentation](https://docs.expo.dev/)
+- [Supabase Documentation](https://supabase.com/docs)
+- [React Native Documentation](https://reactnative.dev/docs/getting-started)
+
+## Cấu trúc dự án
+
+```
+SplitBillApp/
+├── src/                # Mã nguồn chính
+│   └── app/            # Các màn hình (file-based routing)
+├── assets/             # Hình ảnh, font, ...
+├── supabase/           # Supabase migrations & edge functions
+├── scripts/            # Scripts hỗ trợ
+├── android/            # Native Android project
+├── app.json            # Cấu hình Expo
+├── tsconfig.json       # Cấu hình TypeScript
+└── package.json        # Dependencies & scripts
+```
+
+## Tài liệu tham khảo
+
+- [Expo Documentation](https://docs.expo.dev/)
+- [Supabase Documentation](https://supabase.com/docs)
+- [React Native Documentation](https://reactnative.dev/docs/getting-started)
+
