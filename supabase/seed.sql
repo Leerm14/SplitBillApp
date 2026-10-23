@@ -37,13 +37,53 @@ DECLARE
   _pay1_id UUID := 'd1111111-1111-1111-1111-111111111111';
   _pay2_id UUID := 'd2222222-2222-2222-2222-222222222222';
 
+  _users UUID[];
+  _groups UUID[];
+
 BEGIN
+  _users := ARRAY[_user1_id, _user2_id, _user3_id, _user4_id];
+  _groups := ARRAY[_group1_id, _group2_id];
+
+  -- ============================
+  -- 0. DỌN DỮ LIỆU DEMO CŨ (chạy lại được)
+  -- ============================
+  -- Từ migration 0010, xóa auth.users KHÔNG còn xóa dây chuyền public.profiles: trigger
+  -- on_auth_user_deleted chỉ ẩn danh hồ sơ và giữ lại làm "bia mộ". Nếu chỉ xóa auth.users rồi
+  -- tạo lại, handle_new_user sẽ chèn trùng khóa profiles_pkey. Vì vậy dọn theo thứ tự phụ thuộc,
+  -- rồi xóa auth.users, cuối cùng xóa hẳn hồ sơ demo.
+  -- Lưu ý: xóa cả dữ liệu tài khoản demo đã tạo ở nhóm khác (khoản chi, thanh toán, thành viên).
+  -- Chỉ chạy trên project dev/demo, không dùng tài khoản demo trong nhóm thật.
+  DELETE FROM public.notifications
+   WHERE user_id = ANY(_users) OR actor_id = ANY(_users) OR group_id = ANY(_groups);
+  DELETE FROM public.activity_logs
+   WHERE actor_id = ANY(_users) OR group_id = ANY(_groups);
+  DELETE FROM public.payments
+   WHERE group_id = ANY(_groups) OR from_id = ANY(_users) OR to_id = ANY(_users) OR decided_by = ANY(_users);
+  DELETE FROM public.expense_shares
+   WHERE user_id = ANY(_users)
+      OR expense_id IN (SELECT id FROM public.expenses
+                         WHERE group_id = ANY(_groups) OR paid_by = ANY(_users) OR created_by = ANY(_users));
+  DELETE FROM public.expenses
+   WHERE group_id = ANY(_groups) OR paid_by = ANY(_users) OR created_by = ANY(_users);
+  DELETE FROM public.group_invites
+   WHERE group_id = ANY(_groups) OR created_by = ANY(_users) OR invited_user_id = ANY(_users);
+  DELETE FROM public.group_members
+   WHERE group_id = ANY(_groups) OR user_id = ANY(_users);
+  DELETE FROM public.groups
+   WHERE id = ANY(_groups) OR owner_id = ANY(_users);
+  DELETE FROM public.friendships
+   WHERE requester_id = ANY(_users) OR addressee_id = ANY(_users);
+  DELETE FROM public.payment_handles WHERE user_id = ANY(_users);
+  DELETE FROM public.push_tokens WHERE user_id = ANY(_users);
+
+  DELETE FROM auth.identities WHERE user_id = ANY(_users);
+  DELETE FROM auth.users WHERE id = ANY(_users);
+  -- Hồ sơ "bia mộ" còn lại sau khi xóa auth.users
+  DELETE FROM public.profiles WHERE id = ANY(_users);
+
   -- ============================
   -- 1. TẠO AUTH USERS (dùng hàm nội bộ Supabase)
   -- ============================
-
-  -- Xóa dữ liệu cũ nếu đã tồn tại (chạy lại được)
-  DELETE FROM auth.users WHERE id IN (_user1_id, _user2_id, _user3_id, _user4_id);
 
   -- User 1: Nguyễn Văn An
   INSERT INTO auth.users (

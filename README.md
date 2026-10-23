@@ -44,11 +44,11 @@ npx expo start
 
 Sau khi chạy, terminal sẽ hiện QR code và các tùy chọn:
 
-| Phím | Hành động                  |
-| ---- | -------------------------- |
-| `a`  | Mở trên Android Emulator  |
-| `i`  | Mở trên iOS Simulator     |
-| `w`  | Mở trên trình duyệt web   |
+| Phím | Hành động                |
+| ---- | ------------------------ |
+| `a`  | Mở trên Android Emulator |
+| `i`  | Mở trên iOS Simulator    |
+| `w`  | Mở trên trình duyệt web  |
 
 Hoặc mở app **Expo Go** trên điện thoại → quét QR code để chạy trực tiếp.
 
@@ -89,40 +89,19 @@ npx expo start
 
 > **Lưu ý:** React Native / Expo không giống app Android thuần. Code chính viết bằng TypeScript/JavaScript, Android Studio chỉ build phần native shell. Cả Metro bundler và Android Studio phải chạy đồng thời để app hoạt động.
 
-## Tài khoản test (Mock Data)
-
-Dự án có sẵn file seed data tại `supabase/seed.sql`. Để tạo dữ liệu mẫu, vào **Supabase Dashboard → SQL Editor**, paste nội dung file `seed.sql` và chạy.
-
-### Tài khoản đăng nhập
-
-| Email                  | Mật khẩu   | Tên             | Vai trò           |
-| ---------------------- | ---------- | --------------- | ----------------- |
-| demo@splitbill.test    | Demo123!   | Nguyễn Văn An   | Chủ nhóm          |
-| demo2@splitbill.test   | Demo123!   | Trần Thị Bình   | Thành viên        |
-| demo3@splitbill.test   | Demo123!   | Lê Hoàng Cường  | Thành viên        |
-| demo4@splitbill.test   | Demo123!   | Phạm Minh Dũng  | Thành viên        |
-
-### Dữ liệu mẫu bao gồm
-
-- **2 nhóm**: "Đi Đà Lạt 🏔️" (4 người) và "Ăn trưa Công ty 🍜" (3 người)
-- **4 khoản chi**: Khách sạn, ăn tối, thuê xe, bún bò (tổng ~4 triệu VNĐ)
-- **2 thanh toán**: 1 đang chờ (PENDING), 1 đã xác nhận (CONFIRMED)
-- **Bạn bè**: An ↔ Bình, An ↔ Cường (đã kết bạn), Dũng → An (đang chờ)
-- **Thông tin thanh toán**: Tài khoản ngân hàng, MoMo
-
 ## Các lệnh hữu ích
 
-| Lệnh                      | Mô tả                                  |
-| -------------------------- | --------------------------------------- |
-| `npm start`                | Khởi chạy Expo dev server              |
-| `npm run android`          | Build và chạy trên Android             |
-| `npm run ios`              | Build và chạy trên iOS                 |
-| `npm run web`              | Chạy trên trình duyệt                  |
-| `npm test`                 | Chạy unit test                         |
-| `npm run test:watch`       | Chạy unit test ở chế độ watch          |
-| `npm run test:coverage`    | Chạy unit test với báo cáo coverage    |
-| `npm run lint`             | Kiểm tra lỗi code với ESLint          |
-| `npm run test:db`          | Chạy test database (Supabase)          |
+| Lệnh                    | Mô tả                               |
+| ----------------------- | ----------------------------------- |
+| `npm start`             | Khởi chạy Expo dev server           |
+| `npm run android`       | Build và chạy trên Android          |
+| `npm run ios`           | Build và chạy trên iOS              |
+| `npm run web`           | Chạy trên trình duyệt               |
+| `npm test`              | Chạy unit test                      |
+| `npm run test:watch`    | Chạy unit test ở chế độ watch       |
+| `npm run test:coverage` | Chạy unit test với báo cáo coverage |
+| `npm run lint`          | Kiểm tra lỗi code với ESLint        |
+| `npm run test:db`       | Chạy test database (Supabase)       |
 
 ## Cấu trúc dự án
 
@@ -165,4 +144,3 @@ SplitBillApp/
 - [Expo Documentation](https://docs.expo.dev/)
 - [Supabase Documentation](https://supabase.com/docs)
 - [React Native Documentation](https://reactnative.dev/docs/getting-started)
-
