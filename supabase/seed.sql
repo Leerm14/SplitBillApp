@@ -39,6 +39,7 @@ DECLARE
 
   _users UUID[];
   _groups UUID[];
+  _col TEXT;
 
 BEGIN
   _users := ARRAY[_user1_id, _user2_id, _user3_id, _user4_id];
@@ -168,6 +169,20 @@ BEGIN
     jsonb_build_object('sub', _user4_id::text, 'email', 'demo4@splitbill.test'),
     'email', _user4_id::text, now(), now(), now()
   );
+
+  -- Supabase Auth (GoTrue) đọc các cột token này như chuỗi: NULL làm đăng nhập lỗi
+  -- "Database error querying schema". Đăng ký qua API thì chúng là '', chèn tay thì phải tự đặt.
+  -- Chỉ cập nhật cột có thật trong bản auth.users của project (khác nhau theo phiên bản).
+  FOR _col IN
+    SELECT column_name FROM information_schema.columns
+     WHERE table_schema = 'auth' AND table_name = 'users'
+       AND column_name IN ('confirmation_token', 'recovery_token', 'email_change_token_new',
+                           'email_change_token_current', 'email_change', 'phone_change',
+                           'phone_change_token', 'reauthentication_token')
+  LOOP
+    EXECUTE format('UPDATE auth.users SET %1$I = '''' WHERE id = ANY($1) AND %1$I IS NULL', _col)
+      USING _users;
+  END LOOP;
 
   -- ============================
   -- 2. PROFILES (trigger handle_new_user đã tạo, nhưng ta cập nhật thêm)
