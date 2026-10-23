@@ -1,4 +1,5 @@
 import { throwApiError } from '@/api/errors';
+import { toJoinResult, type JoinResult } from '@/lib/membership';
 import { supabase } from '@/lib/supabase';
 
 // ============================
@@ -17,6 +18,8 @@ export type Group = {
   avatar_path?: string | null;
   currency: string;
   status: string;
+  /** Migration 0014: bật thì người vào bằng link / mã nhóm / QR phải chờ chủ nhóm duyệt (NULL/thiếu = tắt) */
+  require_approval?: boolean | null;
   created_at: string;
 };
 
@@ -193,10 +196,98 @@ export async function createGroup(
   return (Array.isArray(data) ? data[0] : data) as Group;
 }
 
-export async function joinGroup(code: string) {
-  const { data, error, status } = await supabase.rpc('join_group', { _code: code });
+// ============================
+// Duyệt thành viên mới (migration 0014)
+// ============================
+
+export type { JoinResult, JoinStatus } from '@/lib/membership';
+
+/** Vào nhóm bằng link mời (token). Nhóm bật duyệt → PENDING. */
+export async function joinByToken(token: string): Promise<JoinResult> {
+  const { data, error, status } = await supabase.rpc('join_by_token', { _token: token });
+  if (error) throwApiError(error, status);
+  return toJoinResult(data);
+}
+
+/** Vào nhóm bằng mã nhóm (nhập tay hoặc QR). Nhóm bật duyệt → PENDING. */
+export async function joinByCode(code: string): Promise<JoinResult> {
+  const { data, error, status } = await supabase.rpc('join_by_code', { _code: code });
+  if (error) throwApiError(error, status);
+  return toJoinResult(data);
+}
+
+/** Chủ nhóm bật / tắt duyệt thành viên mới. Trả dòng nhóm. */
+export async function setJoinApproval(groupId: string, required: boolean): Promise<Group> {
+  const { data, error, status } = await supabase.rpc('set_join_approval', { _group_id: groupId, _required: required });
+  if (error) throwApiError(error, status);
+  return (Array.isArray(data) ? data[0] : data) as Group;
+}
+
+/** Yêu cầu tham gia đang chờ duyệt (chỉ chủ nhóm đọc được). */
+export type JoinRequest = {
+  id: string;
+  userId: string;
+  displayName: string;
+  userCode: string | null;
+  avatarPath: string | null;
+  /** Đường vào: link / mã nhóm / QR (giá trị do server đặt, ví dụ 'TOKEN' | 'CODE') */
+  via: string | null;
+  createdAt: string;
+};
+
+export async function fetchJoinRequests(groupId: string): Promise<JoinRequest[]> {
+  const { data, error, status } = await supabase.rpc('list_join_requests', { _group_id: groupId });
+  if (error) throwApiError(error, status);
+  const seen = new Set<string>();
+  const out: JoinRequest[] = [];
+  for (const r of (data ?? []) as any[]) {
+    if (!r?.id || seen.has(r.id)) continue;
+    seen.add(r.id);
+    out.push({
+      id: r.id,
+      userId: r.user_id,
+      displayName: r.display_name ?? '',
+      userCode: r.user_code ?? null,
+      avatarPath: r.avatar_path ?? null,
+      via: r.via ?? null,
+      createdAt: r.created_at,
+    });
+  }
+  return out;
+}
+
+/** Chủ nhóm duyệt yêu cầu → người xin trở thành thành viên ACTIVE. Trả dòng nhóm. */
+export async function approveJoinRequest(requestId: string): Promise<Group> {
+  const { data, error, status } = await supabase.rpc('approve_join_request', { _request_id: requestId });
+  if (error) throwApiError(error, status);
+  return (Array.isArray(data) ? data[0] : data) as Group;
+}
+
+export async function rejectJoinRequest(requestId: string, reason?: string | null) {
+  const { data, error, status } = await supabase.rpc('reject_join_request', {
+    _request_id: requestId,
+    _reason: reason?.trim() ? reason.trim() : null,
+  });
   if (error) throwApiError(error, status);
   return data;
+}
+
+/** Người xin tự hủy yêu cầu đang chờ. */
+export async function cancelJoinRequest(requestId: string) {
+  const { data, error, status } = await supabase.rpc('cancel_join_request', { _request_id: requestId });
+  if (error) throwApiError(error, status);
+  return data;
+}
+
+export type MyJoinRequest = { status: string; requestId: string };
+
+/** Yêu cầu tham gia gần nhất của mình ở nhóm (null = chưa có). */
+export async function fetchMyJoinRequest(groupId: string): Promise<MyJoinRequest | null> {
+  const { data, error, status } = await supabase.rpc('my_join_request', { _group_id: groupId });
+  if (error) throwApiError(error, status);
+  const raw = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+  if (!raw || typeof raw.request_id !== 'string') return null;
+  return { status: typeof raw.status === 'string' ? raw.status : '', requestId: raw.request_id };
 }
 
 /**
@@ -262,17 +353,15 @@ export async function revokeInvite(inviteId: string) {
   return data;
 }
 
-export async function acceptInvite(token: string) {
-  const { data, error, status } = await supabase.rpc('accept_invite', { _token: token });
+/**
+ * MVP-06: Chấp nhận lời mời đích danh (thông báo GROUP_INVITED) — chỉ người được mời.
+ * Migration 0014: dùng accept_invite_by_id_v2 (accept_invite / join_group / accept_invite_by_id cũ báo
+ * JOIN_APPROVAL_REQUIRED khi nhóm bật duyệt). Lời mời đích danh thường vào thẳng, nhưng vẫn xử lý PENDING.
+ */
+export async function acceptInviteById(inviteId: string): Promise<JoinResult> {
+  const { data, error, status } = await supabase.rpc('accept_invite_by_id_v2', { _invite_id: inviteId });
   if (error) throwApiError(error, status);
-  return data;
-}
-
-/** MVP-06: Chấp nhận lời mời đích danh (thông báo GROUP_INVITED) — chỉ người được mời. Trả dòng nhóm. */
-export async function acceptInviteById(inviteId: string): Promise<Group> {
-  const { data, error, status } = await supabase.rpc('accept_invite_by_id', { _invite_id: inviteId });
-  if (error) throwApiError(error, status);
-  return (Array.isArray(data) ? data[0] : data) as Group;
+  return toJoinResult(data);
 }
 
 export async function removeMember(groupId: string, userId: string) {

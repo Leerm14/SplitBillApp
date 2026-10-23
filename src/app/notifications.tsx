@@ -8,13 +8,15 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter, Stack } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { toUserMessage } from '@/api/errors';
 import { acceptInviteById } from '@/api/groups';
+import { showJoinPendingAlert } from '@/components/join-pending';
+import { describeNotification } from '@/lib/notification-text';
 import { useAuth } from '@/hooks/use-auth';
 import {
   fetchNotifications,
@@ -25,30 +27,19 @@ import {
 } from '@/api/notifications';
 
 // ============================
-// Type → Display mapping
+// Type → Display: tiêu đề + câu "ai đã làm gì, bao nhiêu" (src/lib/notification-text.ts)
 // ============================
-const NOTIFICATION_MAP: Record<string, { icon: string; title: string }> = {
-  EXPENSE_CREATED: { icon: '🧾', title: 'Khoản chi mới' },
-  EXPENSE_UPDATED: { icon: '✏️', title: 'Khoản chi đã sửa' },
-  EXPENSE_CANCELLED: { icon: '❌', title: 'Khoản chi đã hủy' },
-  PAYMENT_CREATED: { icon: '💳', title: 'Yêu cầu thanh toán' },
-  PAYMENT_CONFIRMED: { icon: '✅', title: 'Thanh toán đã xác nhận' },
-  PAYMENT_REJECTED: { icon: '❌', title: 'Thanh toán bị từ chối' },
-  PAYMENT_DISPUTED: { icon: '⚠️', title: 'Thanh toán bị báo sai lệch' },
-  PAYMENT_CANCELLED: { icon: '🚫', title: 'Thanh toán đã hủy' },
-  MEMBER_JOINED: { icon: '👋', title: 'Thành viên mới' },
-  MEMBER_REMOVED: { icon: '👤', title: 'Thành viên bị xóa' },
-  INVITE_CREATED: { icon: '🔗', title: 'Lời mời tham gia nhóm' },
-  GROUP_INVITED: { icon: '📨', title: 'Bạn được mời vào nhóm' },
-  INVITE_ACCEPTED: { icon: '✅', title: 'Lời mời đã chấp nhận' },
-  GROUP_UPDATED: { icon: '⚙️', title: 'Nhóm đã cập nhật' },
-  SUGGESTION_CHANGED: { icon: '💡', title: 'Gợi ý tất toán thay đổi' },
-};
-
-const DEFAULT_DISPLAY = { icon: '🔔', title: 'Thông báo' };
-
-function getNotificationDisplay(type: string) {
-  return NOTIFICATION_MAP[type] ?? DEFAULT_DISPLAY;
+function getNotificationDisplay(item: NotificationItem) {
+  return describeNotification({
+    type: item.type,
+    actorName: item.actor?.display_name,
+    expense: item.expense
+      ? { description: item.expense.description, amount: item.expense.amount, creatorName: item.expense.creator?.display_name }
+      : null,
+    payment: item.payment
+      ? { amount: item.payment.amount, senderName: item.payment.sender?.display_name, receiverName: item.payment.receiver?.display_name }
+      : null,
+  });
 }
 
 // ============================
@@ -138,13 +129,17 @@ export default function NotificationsScreen() {
       .map((key) => ({ title: key, data: groups[key] }));
   }, [notifications]);
 
-  /** MVP-06: lời mời đích danh — hỏi xác nhận rồi accept_invite_by_id và vào nhóm */
+  /**
+   * MVP-06: lời mời đích danh — hỏi xác nhận rồi accept_invite_by_id_v2 và vào nhóm.
+   * Migration 0014: nếu server trả PENDING (chờ chủ nhóm duyệt) thì báo, không mở nhóm.
+   */
   const acceptMutation = useMutation({
     mutationFn: (inviteId: string) => acceptInviteById(inviteId),
-    onSuccess: (group) => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      if (group?.id) router.push(`/group/${group.id}` as any);
+      if (result.status === 'PENDING') showJoinPendingAlert(result, queryClient);
+      else if (result.groupId) router.push(`/group/${result.groupId}` as any);
     },
     onError: (err) => {
       Alert.alert('Không thể tham gia', toUserMessage(err, 'Lời mời không còn hiệu lực.'));
@@ -177,6 +172,22 @@ export default function NotificationsScreen() {
         confirmInvite(item);
         return;
       }
+      // Migration 0014: chủ nhóm mở danh sách yêu cầu chờ duyệt
+      if (item.type === 'JOIN_REQUESTED' && item.group_id) {
+        router.push(`/group/${item.group_id}/members` as any);
+        return;
+      }
+      // Bị từ chối → chưa là thành viên, không mở nhóm được
+      if (item.type === 'JOIN_REJECTED') {
+        const groupName = item.group?.name ? `"${item.group.name}"` : 'nhóm';
+        Alert.alert('Yêu cầu bị từ chối', `Chủ nhóm đã từ chối yêu cầu tham gia ${groupName} của bạn.`);
+        return;
+      }
+      // Kết bạn: không gắn nhóm → mở tab Danh bạ (lời mời đang chờ nằm ở đó)
+      if (item.type.startsWith('FRIEND_')) {
+        router.push('/(tabs)/contacts' as any);
+        return;
+      }
       if (item.expense_id && item.group_id) {
         router.push(`/group/${item.group_id}/expense/${item.expense_id}` as any);
       } else if (item.payment_id) {
@@ -190,7 +201,7 @@ export default function NotificationsScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: NotificationItem }) => {
-      const display = getNotificationDisplay(item.type);
+      const display = getNotificationDisplay(item);
       const isUnread = item.read_at === null;
 
       return (
@@ -217,6 +228,12 @@ export default function NotificationsScreen() {
             >
               {display.title}
             </Text>
+
+            {display.body && (
+              <Text style={styles.notificationBody} numberOfLines={2}>
+                {display.body}
+              </Text>
+            )}
 
             {item.group?.name && (
               <View style={styles.groupTag}>
@@ -247,7 +264,7 @@ export default function NotificationsScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#007AFF" />
         </View>
@@ -258,7 +275,7 @@ export default function NotificationsScreen() {
   // APP-19: Hiển thị lỗi thay vì dữ liệu trống
   if (isError) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
           <Text style={{ fontSize: 16, color: '#FF3B30', textAlign: 'center', marginBottom: 12 }}>
             ⚠️ Không thể tải thông báo
@@ -278,27 +295,23 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Text style={{ fontSize: 22, color: '#007AFF' }}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Thông báo</Text>
-        {(unreadCount ?? 0) > 0 ? (
-          <TouchableOpacity
-            onPress={() => markAllReadMutation.mutate()}
-            disabled={markAllReadMutation.isPending}
-            style={styles.markAllButton}
-          >
-            <Text style={styles.markAllText}>
-              {markAllReadMutation.isPending ? 'Đang xử lý...' : 'Đã đọc tất cả'}
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.markAllButton} />
-        )}
-      </View>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <Stack.Screen
+        options={{
+          headerRight: () =>
+            (unreadCount ?? 0) > 0 ? (
+              <TouchableOpacity
+                onPress={() => markAllReadMutation.mutate()}
+                disabled={markAllReadMutation.isPending}
+                style={styles.markAllButton}
+              >
+                <Text style={styles.markAllText}>
+                  {markAllReadMutation.isPending ? 'Đang xử lý...' : 'Đã đọc tất cả'}
+                </Text>
+              </TouchableOpacity>
+            ) : null,
+        }}
+      />
 
       {/* List */}
       {sections.length === 0 ? (
@@ -340,26 +353,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 32,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
-  },
-  backButton: {
-    width: 80,
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-  },
   markAllButton: {
-    width: 80,
     alignItems: 'flex-end',
   },
   markAllText: {
@@ -427,6 +421,12 @@ const styles = StyleSheet.create({
   unreadTitle: {
     fontWeight: '600',
     color: '#000',
+  },
+  notificationBody: {
+    fontSize: 14,
+    color: '#555',
+    marginTop: 2,
+    lineHeight: 19,
   },
   groupTag: {
     backgroundColor: '#e8f0fe',

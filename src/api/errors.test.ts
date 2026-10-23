@@ -39,3 +39,12 @@ describe('APP-05: xung đột phiên bản', () => {
     expect(isVersionConflict(new Error('NOT_MEMBER: x'))).toBe(false);
   });
 });
+
+describe('Migration 0014: duyệt thành viên mới', () => {
+  test('JOIN_APPROVAL_REQUIRED có câu tiếng Việt', () => {
+    expect(toUserMessage(new Error('JOIN_APPROVAL_REQUIRED: This group requires owner approval'))).toBe(
+      'Nhóm này cần chủ nhóm duyệt thành viên mới. Vui lòng cập nhật ứng dụng rồi thử lại.',
+    );
+    expect(isBusinessError(new Error('JOIN_APPROVAL_REQUIRED: x'))).toBe(true);
+  });
+});

@@ -20,6 +20,7 @@ import { compressReceipt, type ExpenseShareInput } from '@/api/expenses';
 import { isActiveMember } from '@/api/groups';
 import { ErrorState } from '@/components/error-state';
 import { ReceiptPicker } from '@/components/receipt-image';
+import { ReceiptReviewModal, type ReceiptDraft } from '@/components/receipt-review';
 import { formatVND, parseVND } from '@/domain/money';
 import {
   bpToPercentText,
@@ -32,6 +33,8 @@ import {
 } from '@/domain/split';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupAccess } from '@/hooks/use-group-settlement';
+import { useGroupsList } from '@/hooks/use-groups';
+import { isOcrAvailable } from '@/lib/ocr';
 import { persistReceiptCopy } from '@/lib/receipt-files';
 import { buildReceiptPath } from '@/lib/receipt-path';
 import { submitAction } from '@/offline';
@@ -46,10 +49,16 @@ function computePercentShares(totalAmount: number, memberIds: string[], percents
 }
 
 export default function AddExpenseScreen() {
-  const { id: groupId } = useLocalSearchParams<{ id: string }>();
+  const { id: routeGroupId, pickGroup } = useLocalSearchParams<{ id: string; pickGroup?: string }>();
   const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+
+  // Mở từ nút + ở Home (pickGroup=1): cho chọn nhóm, mặc định là nhóm trên route (nhóm mới nhất)
+  const showGroupPicker = pickGroup === '1';
+  const { activeGroups } = useGroupsList();
+  const [groupIdInput, setGroupIdInput] = useState<string | null>(null);
+  const groupId = groupIdInput ?? routeGroupId;
 
   const [description, setDescription] = useState('');
   const [amountText, setAmountText] = useState('');
@@ -64,6 +73,10 @@ export default function AddExpenseScreen() {
   const [submitting, setSubmitting] = useState(false);
   // MVP-01: Ảnh hóa đơn (uri trên máy, chưa upload)
   const [receiptUri, setReceiptUri] = useState<string | null>(null);
+  // OCR-02: kết quả đọc hóa đơn người dùng đã kiểm tra; reviewOpen = đang mở màn kiểm tra
+  const [receiptDraft, setReceiptDraft] = useState<ReceiptDraft | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const ocrAvailable = isOcrAvailable();
   // MVP-01 / L7: đường dẫn ảnh tạo MỘT lần cho mỗi form — gửi lại (upsert) không tạo ảnh mồ côi
   const receiptPathRef = useRef<string | null>(null);
   // APP-07: idempotency key giữ theo form, chỉ đổi khi đã lưu
@@ -110,6 +123,38 @@ export default function AddExpenseScreen() {
   }, [amount, selectedIds, splitMode, customAmounts, percentInputs]);
 
   const customTotal = splitMode === 'EXACT' ? shares.reduce((s, sh) => s + sh.amount, 0) : 0;
+
+  /** Đổi nhóm: xoá các lựa chọn gắn với thành viên nhóm cũ; mô tả / số tiền / ghi chú / ảnh giữ nguyên */
+  const selectGroup = (nextId: string) => {
+    if (nextId === groupId || submittingRef.current) return;
+    setGroupIdInput(nextId);
+    setPaidBy(null);
+    setSelectedMembers(null);
+    setCustomAmounts({});
+    setPercentInputs({});
+    receiptPathRef.current = null;
+    idempotencyKeyRef.current = Crypto.randomUUID();
+  };
+
+  /** Chọn ảnh mới → bỏ kết quả đọc của ảnh cũ, đọc ngay nếu máy có ML Kit */
+  const handleReceiptPicked = (uri: string) => {
+    setReceiptUri(uri);
+    setReceiptDraft(null);
+    if (ocrAvailable) setReviewOpen(true);
+  };
+
+  const handleReceiptRemoved = () => {
+    setReceiptUri(null);
+    setReceiptDraft(null);
+  };
+
+  /** OCR-02 / BR-12: điền sẵn số tiền (tổng đã xác nhận) và mô tả (tên cửa hàng, nếu đang trống) */
+  const applyReceipt = (draft: ReceiptDraft) => {
+    setReceiptDraft(draft);
+    setReviewOpen(false);
+    setAmountText(String(draft.total));
+    if (!description.trim() && draft.storeName) setDescription(draft.storeName);
+  };
 
   const toggleMember = (memberId: string) => {
     const next = new Set(selectedMembers);
@@ -195,6 +240,10 @@ export default function AddExpenseScreen() {
           note: note.trim(),
           receiptPath,
           localReceiptUri,
+          // OCR-06: khoản chi có danh sách món đọc từ hóa đơn → source = OCR
+          ...(receiptDraft && receiptDraft.items.length > 0
+            ? { receiptItems: receiptDraft.items, source: 'OCR' as const }
+            : {}),
         },
         currentKey,
         user.id,
@@ -230,7 +279,11 @@ export default function AddExpenseScreen() {
     setPercentInputs(next);
   };
 
-  if (membersQ.isLoading || groupQ.isLoading) {
+  const membersLoading = membersQ.isLoading || groupQ.isLoading;
+  const membersFailed = !!membersQ.error && !membersQ.data;
+
+  // Khi có bộ chọn nhóm, trạng thái tải / lỗi hiện ngay trong form để vẫn đổi được nhóm
+  if (!showGroupPicker && membersLoading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -238,7 +291,7 @@ export default function AddExpenseScreen() {
     );
   }
 
-  if (membersQ.error && !membersQ.data) {
+  if (!showGroupPicker && membersFailed) {
     return (
       <ErrorState
         message={toUserMessage(membersQ.error, 'Không thể tải danh sách thành viên')}
@@ -248,7 +301,7 @@ export default function AddExpenseScreen() {
   }
 
   // REV-S5: chỉ xem
-  if (!canWrite) {
+  if (!showGroupPicker && !canWrite) {
     return (
       <ErrorState
         title={!isViewerActive ? 'Bạn đã rời nhóm' : isGroupClosed ? 'Nhóm đã đóng' : 'Không thể thêm khoản chi'}
@@ -263,6 +316,29 @@ export default function AddExpenseScreen() {
       style={styles.flex}
     >
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        {/* Nhóm (chỉ khi mở từ nút + ở Home) */}
+        {showGroupPicker && activeGroups.length > 0 && (
+          <>
+            <Text style={styles.label}>Nhóm</Text>
+            <View style={styles.memberList}>
+              {activeGroups.map((g) => (
+                <Pressable
+                  key={g.id}
+                  style={[styles.memberChip, groupId === g.id && styles.memberChipActive]}
+                  onPress={() => selectGroup(g.id)}
+                  disabled={submitting}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: groupId === g.id }}
+                >
+                  <Text style={[styles.memberChipText, groupId === g.id && styles.memberChipTextActive]}>
+                    {g.name}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        )}
+
         {/* Mô tả */}
         <Text style={styles.label}>Mô tả</Text>
         <TextInput
@@ -304,128 +380,177 @@ export default function AddExpenseScreen() {
           localUri={receiptUri}
           remoteUrl={null}
           disabled={submitting}
-          onPicked={setReceiptUri}
-          onRemove={() => setReceiptUri(null)}
+          onPicked={handleReceiptPicked}
+          onRemove={handleReceiptRemoved}
         />
+        {/* OCR-02: đọc món + số tiền bằng ML Kit trên máy, người dùng sửa trước khi dùng */}
+        {receiptUri && ocrAvailable ? (
+          receiptDraft ? (
+            <View style={styles.receiptSummary}>
+              <View style={styles.flex}>
+                <Text style={styles.receiptSummaryTitle}>
+                  🧾 {receiptDraft.items.length} dòng · {formatVND(receiptDraft.total)}
+                </Text>
+                {receiptDraft.total !== amount ? (
+                  <Text style={styles.receiptSummaryWarn}>Số tiền đang khác tổng hóa đơn</Text>
+                ) : null}
+              </View>
+              <Pressable onPress={() => setReviewOpen(true)} disabled={submitting} hitSlop={8}>
+                <Text style={styles.receiptSummaryAction}>Sửa món</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable style={styles.readReceiptBtn} onPress={() => setReviewOpen(true)} disabled={submitting}>
+              <Text style={styles.readReceiptText}>🔍 Đọc món và số tiền từ ảnh</Text>
+            </Pressable>
+          )
+        ) : null}
 
-        {/* Người trả */}
-        <Text style={styles.label}>Người trả</Text>
-        <View style={styles.memberList}>
+        {/* Phần phụ thuộc nhóm: thành viên, người trả, cách chia */}
+        {membersLoading ? (
+          <ActivityIndicator style={styles.sectionLoading} size="large" color="#007AFF" />
+        ) : membersFailed ? (
+          <ErrorState
+            inline
+            message={toUserMessage(membersQ.error, 'Không thể tải danh sách thành viên')}
+            onRetry={() => membersQ.refetch()}
+          />
+        ) : !canWrite ? (
+          <ErrorState
+            inline
+            title={!isViewerActive ? 'Bạn đã rời nhóm' : isGroupClosed ? 'Nhóm đã đóng' : 'Không thể thêm khoản chi'}
+            message="Bạn chỉ xem được dữ liệu của nhóm này, không thể thêm khoản chi mới."
+          />
+        ) : (
+          <>
+          {/* Người trả */}
+          <Text style={styles.label}>Người trả</Text>
+          <View style={styles.memberList}>
+            {members.map((m) => (
+              <Pressable
+                key={m.id}
+                style={[styles.memberChip, paidBy === m.id && styles.memberChipActive]}
+                onPress={() => setPaidBy(m.id)}
+              >
+                <Text style={[styles.memberChipText, paidBy === m.id && styles.memberChipTextActive]}>
+                  {m.displayName || m.id.slice(0, 8)}
+                  {m.id === user?.id ? ' (bạn)' : ''}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {/* Chia cho */}
+          <View style={styles.splitHeader}>
+            <Text style={styles.label}>Chia cho</Text>
+          </View>
+
+          {/* Segmented control */}
+          <View style={styles.splitTabs}>
+            {(['EQUAL', 'PERCENT', 'EXACT'] as const).map((mode) => (
+              <Pressable
+                key={mode}
+                style={[styles.splitTab, splitMode === mode && styles.splitTabActive]}
+                onPress={() => setSplitMode(mode)}
+              >
+                <Text style={[styles.splitTabText, splitMode === mode && styles.splitTabTextActive]}>
+                  {mode === 'EQUAL' ? 'Chia đều' : mode === 'PERCENT' ? 'Phần trăm' : 'Số tiền'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
           {members.map((m) => (
-            <Pressable
-              key={m.id}
-              style={[styles.memberChip, paidBy === m.id && styles.memberChipActive]}
-              onPress={() => setPaidBy(m.id)}
-            >
-              <Text style={[styles.memberChipText, paidBy === m.id && styles.memberChipTextActive]}>
+            <View key={m.id} style={styles.shareRow}>
+              <Pressable
+                style={[styles.checkbox, selectedMembers.has(m.id) && styles.checkboxActive]}
+                onPress={() => toggleMember(m.id)}
+              >
+                {selectedMembers.has(m.id) && <Text style={styles.checkmark}>✓</Text>}
+              </Pressable>
+              <Text style={styles.shareName}>
                 {m.displayName || m.id.slice(0, 8)}
-                {m.id === user?.id ? ' (bạn)' : ''}
               </Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {/* Chia cho */}
-        <View style={styles.splitHeader}>
-          <Text style={styles.label}>Chia cho</Text>
-        </View>
-
-        {/* Segmented control */}
-        <View style={styles.splitTabs}>
-          {(['EQUAL', 'PERCENT', 'EXACT'] as const).map((mode) => (
-            <Pressable
-              key={mode}
-              style={[styles.splitTab, splitMode === mode && styles.splitTabActive]}
-              onPress={() => setSplitMode(mode)}
-            >
-              <Text style={[styles.splitTabText, splitMode === mode && styles.splitTabTextActive]}>
-                {mode === 'EQUAL' ? 'Chia đều' : mode === 'PERCENT' ? 'Phần trăm' : 'Số tiền'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {members.map((m) => (
-          <View key={m.id} style={styles.shareRow}>
-            <Pressable
-              style={[styles.checkbox, selectedMembers.has(m.id) && styles.checkboxActive]}
-              onPress={() => toggleMember(m.id)}
-            >
-              {selectedMembers.has(m.id) && <Text style={styles.checkmark}>✓</Text>}
-            </Pressable>
-            <Text style={styles.shareName}>
-              {m.displayName || m.id.slice(0, 8)}
-            </Text>
-            {splitMode === 'EQUAL' && isAmountValid && selectedMembers.has(m.id) ? (
-              <Text style={styles.shareAmount}>
-                {formatVND(shares.find((s) => s.userId === m.id)?.amount || 0)}
-              </Text>
-            ) : splitMode === 'PERCENT' && selectedMembers.has(m.id) ? (
-              <View style={styles.percentContainer}>
+              {splitMode === 'EQUAL' && isAmountValid && selectedMembers.has(m.id) ? (
+                <Text style={styles.shareAmount}>
+                  {formatVND(shares.find((s) => s.userId === m.id)?.amount || 0)}
+                </Text>
+              ) : splitMode === 'PERCENT' && selectedMembers.has(m.id) ? (
+                <View style={styles.percentContainer}>
+                  <TextInput
+                    style={styles.shareInput}
+                    placeholder="0"
+                    placeholderTextColor="#999"
+                    keyboardType="decimal-pad"
+                    value={percentInputs[m.id] || ''}
+                    onChangeText={(t) => setPercentInputs((prev) => ({ ...prev, [m.id]: t }))}
+                  />
+                  <Text style={styles.percentSign}>%</Text>
+                  {isAmountValid && (
+                    <Text style={styles.percentPreview}>
+                      ≈ {formatVND(shares.find((s) => s.userId === m.id)?.amount || 0)}
+                    </Text>
+                  )}
+                </View>
+              ) : splitMode === 'EXACT' && selectedMembers.has(m.id) ? (
                 <TextInput
                   style={styles.shareInput}
                   placeholder="0"
                   placeholderTextColor="#999"
-                  keyboardType="decimal-pad"
-                  value={percentInputs[m.id] || ''}
-                  onChangeText={(t) => setPercentInputs((prev) => ({ ...prev, [m.id]: t }))}
+                  keyboardType="numeric"
+                  value={customAmounts[m.id] || ''}
+                  onChangeText={(t) => setCustomAmounts((prev) => ({ ...prev, [m.id]: t }))}
                 />
-                <Text style={styles.percentSign}>%</Text>
-                {isAmountValid && (
-                  <Text style={styles.percentPreview}>
-                    ≈ {formatVND(shares.find((s) => s.userId === m.id)?.amount || 0)}
-                  </Text>
-                )}
-              </View>
-            ) : splitMode === 'EXACT' && selectedMembers.has(m.id) ? (
-              <TextInput
-                style={styles.shareInput}
-                placeholder="0"
-                placeholderTextColor="#999"
-                keyboardType="numeric"
-                value={customAmounts[m.id] || ''}
-                onChangeText={(t) => setCustomAmounts((prev) => ({ ...prev, [m.id]: t }))}
-              />
-            ) : null}
-          </View>
-        ))}
+              ) : null}
+            </View>
+          ))}
 
-        {/* REV-S9: chia đều phần trăm (thirds → 33,34 + 33,33 + 33,33) */}
-        {splitMode === 'PERCENT' && selectedIds.length > 0 && (
-          <Pressable style={styles.equalPercentBtn} onPress={fillEqualPercent}>
-            <Text style={styles.equalPercentText}>Chia đều %</Text>
-          </Pressable>
-        )}
-
-        {/* Validation feedback */}
-        {splitMode === 'PERCENT' && (
-          <Text style={[styles.customTotal, percentOk ? styles.positive : styles.negative]}>
-            {totalBp === null
-              ? 'Phần trăm không hợp lệ (0–100, tối đa 2 chữ số thập phân) ⚠️'
-              : `Tổng: ${(totalBp / 100).toFixed(2)}% / 100%${percentOk ? ' ✓' : ' ⚠️ Chưa khớp'}`}
-          </Text>
-        )}
-
-        {splitMode === 'EXACT' && isAmountValid && (
-          <Text style={[styles.customTotal, customTotal === amount ? styles.positive : styles.negative]}>
-            Tổng phần chia: {formatVND(customTotal)} / {formatVND(amount)}
-            {customTotal !== amount ? ' ⚠️ Chưa khớp' : ' ✓'}
-          </Text>
-        )}
-
-        {/* Nút tạo */}
-        <Pressable
-          style={[styles.submitBtn, submitting && styles.buttonDisabled]}
-          onPress={handleSubmit}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitBtnText}>Tạo khoản chi</Text>
+          {/* REV-S9: chia đều phần trăm (thirds → 33,34 + 33,33 + 33,33) */}
+          {splitMode === 'PERCENT' && selectedIds.length > 0 && (
+            <Pressable style={styles.equalPercentBtn} onPress={fillEqualPercent}>
+              <Text style={styles.equalPercentText}>Chia đều %</Text>
+            </Pressable>
           )}
-        </Pressable>
+
+          {/* Validation feedback */}
+          {splitMode === 'PERCENT' && (
+            <Text style={[styles.customTotal, percentOk ? styles.positive : styles.negative]}>
+              {totalBp === null
+                ? 'Phần trăm không hợp lệ (0–100, tối đa 2 chữ số thập phân) ⚠️'
+                : `Tổng: ${(totalBp / 100).toFixed(2)}% / 100%${percentOk ? ' ✓' : ' ⚠️ Chưa khớp'}`}
+            </Text>
+          )}
+
+          {splitMode === 'EXACT' && isAmountValid && (
+            <Text style={[styles.customTotal, customTotal === amount ? styles.positive : styles.negative]}>
+              Tổng phần chia: {formatVND(customTotal)} / {formatVND(amount)}
+              {customTotal !== amount ? ' ⚠️ Chưa khớp' : ' ✓'}
+            </Text>
+          )}
+
+          {/* Nút tạo */}
+          <Pressable
+            style={[styles.submitBtn, submitting && styles.buttonDisabled]}
+            onPress={handleSubmit}
+            disabled={submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitBtnText}>Tạo khoản chi</Text>
+            )}
+          </Pressable>
+          </>
+        )}
       </ScrollView>
+      {reviewOpen ? (
+        <ReceiptReviewModal
+          imageUri={receiptUri}
+          initial={receiptDraft}
+          onCancel={() => setReviewOpen(false)}
+          onApply={applyReceipt}
+        />
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -435,6 +560,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f2f2f7' },
   content: { padding: 16, gap: 12, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  sectionLoading: { paddingVertical: 24 },
 
   label: { fontSize: 15, fontWeight: '600', color: '#1a1a1a', marginTop: 4 },
   input: {
@@ -447,6 +573,27 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
   },
   amountPreview: { fontSize: 13, color: '#007AFF', marginTop: -4 },
+
+  readReceiptBtn: {
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  readReceiptText: { fontSize: 15, color: '#007AFF', fontWeight: '600' },
+  receiptSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+  },
+  receiptSummaryTitle: { fontSize: 15, color: '#1a1a1a', fontWeight: '500' },
+  receiptSummaryWarn: { fontSize: 12, color: '#FF9500', marginTop: 2 },
+  receiptSummaryAction: { fontSize: 15, color: '#007AFF', fontWeight: '600' },
 
   memberList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   memberChip: {

@@ -20,14 +20,31 @@ export type NotificationItem = {
   read_at: string | null;
   created_at: string;
   group: { id: string; name: string } | null;
+  /** Người thực hiện (migration 0016 điền cho mọi thông báo mới) */
+  actor: { id: string; display_name: string } | null;
+  /** Khoản chi / thanh toán liên quan — để ghi rõ "ai đã làm gì, bao nhiêu" */
+  expense: { description: string | null; amount: number | null; creator: { display_name: string } | null } | null;
+  payment: {
+    amount: number | null;
+    sender: { display_name: string } | null;
+    receiver: { display_name: string } | null;
+  } | null;
 };
+
+/** PostgREST trả quan hệ một-một dạng object hoặc mảng tùy cách suy luận khóa ngoại */
+function one<T>(v: T | T[] | null | undefined): T | null {
+  return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
+}
 
 export async function fetchNotifications(limit = 50): Promise<NotificationItem[]> {
   const { data, error, status } = await supabase
     .from('notifications')
     .select(`
       id, user_id, type, group_id, expense_id, payment_id, invite_id, read_at, created_at,
-      group:group_id(id, name)
+      group:group_id(id, name),
+      actor:actor_id(id, display_name),
+      expense:expense_id(description, amount, creator:created_by(display_name)),
+      payment:payment_id(amount, sender:from_id(display_name), receiver:to_id(display_name))
     `)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -40,7 +57,19 @@ export async function fetchNotifications(limit = 50): Promise<NotificationItem[]
   for (const n of (data ?? []) as any[]) {
     if (seen.has(n.id)) continue;
     seen.add(n.id);
-    out.push({ ...n, group: Array.isArray(n.group) ? (n.group[0] ?? null) : (n.group ?? null) });
+    const expense = one<any>(n.expense);
+    const payment = one<any>(n.payment);
+    out.push({
+      ...n,
+      group: one(n.group),
+      actor: one(n.actor),
+      expense: expense
+        ? { description: expense.description ?? null, amount: expense.amount == null ? null : Number(expense.amount), creator: one(expense.creator) }
+        : null,
+      payment: payment
+        ? { amount: payment.amount == null ? null : Number(payment.amount), sender: one(payment.sender), receiver: one(payment.receiver) }
+        : null,
+    });
   }
   return out;
 }

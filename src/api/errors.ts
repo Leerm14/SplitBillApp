@@ -168,8 +168,17 @@ const CODE_MESSAGES: Record<string, string> = {
   INVALID_AVATAR_PATH: 'Ảnh đại diện không hợp lệ.',
   ACCOUNT_DELETED: 'Tài khoản này đã bị xóa.',
   OWNER_OF_ACTIVE_GROUP: 'Bạn đang là chủ một nhóm. Hãy chuyển quyền chủ nhóm trước khi xóa tài khoản.',
+  // Migration 0015: thiết bị đang đăng nhập
+  SESSION_NOT_FOUND: 'Thiết bị này đã đăng xuất từ trước.',
+  CANNOT_REVOKE_CURRENT: 'Đây là thiết bị bạn đang dùng — hãy dùng nút Đăng xuất.',
   // MVP-00 / MVP-01: upload ảnh
   UPLOAD_FAILED: 'Không upload được ảnh. Vui lòng thử lại.',
+  // Migration 0014: duyệt thành viên mới
+  JOIN_APPROVAL_REQUIRED: 'Nhóm này cần chủ nhóm duyệt thành viên mới. Vui lòng cập nhật ứng dụng rồi thử lại.',
+  JOIN_REQUEST_NOT_FOUND: 'Không tìm thấy yêu cầu tham gia.',
+  JOIN_REQUEST_PENDING: 'Bạn đã gửi yêu cầu tham gia nhóm này, đang chờ chủ nhóm duyệt.',
+  JOIN_REQUEST_REJECTED: 'Yêu cầu tham gia nhóm đã bị từ chối.',
+  NOT_REQUESTER: 'Chỉ người gửi yêu cầu mới hủy được yêu cầu này.',
 };
 
 /** Câu báo lỗi cho người dùng: ưu tiên mã server → tiếng Việt; lỗi mạng; cuối cùng là message gốc. */

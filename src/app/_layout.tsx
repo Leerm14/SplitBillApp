@@ -11,6 +11,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
 import { useNotifications } from '@/hooks/use-notifications';
 import { useOfflineSync } from '@/hooks/use-offline-sync';
+import { useMyRealtime } from '@/hooks/use-realtime';
 import { SyncStatusBar, isSyncStatusBarVisible } from '@/components/sync-status-bar';
 import { resumableRoute } from '@/lib/app-links';
 import { onPendingLinkChange, peekPendingLink, setPendingLink, takePendingLink } from '@/lib/pending-link';
@@ -99,6 +100,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // Đăng ký push notification khi đã đăng nhập
   useNotifications();
 
+  // Realtime: thông báo mới của mình → làm mới thông báo, nhóm, khoản chi, thanh toán liên quan
+  useMyRealtime(session?.user?.id);
+
   // Đồng bộ hàng đợi offline
   const { pendingCount, pendingItems, failedItems, lastSyncAt, isSyncing, isOnline, sync, retry, discard } =
     useOfflineSync();
@@ -168,7 +172,7 @@ function RootStack() {
         <Stack.Screen name="join-code/[code]" />
         <Stack.Screen name="add-friend/[code]" />
         <Stack.Screen name="scan" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="notifications" />
+        <Stack.Screen name="notifications" options={{ headerShown: true, title: 'Thông báo' }} />
         <Stack.Screen name="history" options={{ headerShown: true, title: 'Lịch sử' }} />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>

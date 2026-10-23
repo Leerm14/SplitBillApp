@@ -45,6 +45,14 @@
         {
           "cameraPermission": "Ứng dụng cần truy cập camera để quét mã QR."
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Ứng dụng cần truy cập thư viện ảnh để chọn ảnh đại diện và ảnh hóa đơn.",
+          "savePhotosPermission": "Ứng dụng cần lưu ảnh mã QR chuyển khoản vào thư viện ảnh.",
+          "granularPermissions": ["photo"]
+        }
       ]
     ],
     "extra": {

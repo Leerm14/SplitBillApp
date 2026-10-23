@@ -11,7 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { acceptInvite } from '@/api/groups';
+import { joinByToken, type JoinResult } from '@/api/groups';
+import { JoinPendingView } from '@/components/join-pending';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function JoinByTokenScreen() {
@@ -20,25 +21,31 @@ export default function JoinByTokenScreen() {
   const queryClient = useQueryClient();
   const { session, loading: authLoading } = useAuth();
   const [error, setError] = useState<string | null>(null);
-  // Mỗi token chỉ gọi acceptInvite một lần (effect có thể chạy lại khi phiên làm mới)
+  // Migration 0014: nhóm bật duyệt thành viên → chờ chủ nhóm duyệt, không vào nhóm
+  const [pending, setPending] = useState<JoinResult | null>(null);
+  // Mỗi token chỉ gọi joinByToken một lần (effect có thể chạy lại khi phiên làm mới)
   const attemptedRef = useRef<string | null>(null);
 
   // APP-15: lỗi token rỗng tính dẫn xuất, không setState trong effect
   const displayError = !token ? 'Token không hợp lệ' : error;
 
   useEffect(() => {
-    // APP-11: chỉ gọi acceptInvite khi đã có phiên; chưa đăng nhập thì AuthGate chuyển sang
+    // APP-11: chỉ gọi joinByToken khi đã có phiên; chưa đăng nhập thì AuthGate chuyển sang
     // đăng nhập và giữ lại đường dẫn này để quay về sau
     if (!token || authLoading || !session) return;
     if (attemptedRef.current === token) return;
     attemptedRef.current = token;
 
-    acceptInvite(token)
-      .then((result: any) => {
-        const groupId = typeof result === 'string' ? result : result?.group_id;
+    joinByToken(token)
+      .then((result) => {
         queryClient.invalidateQueries({ queryKey: ['groups'] });
-        if (groupId) {
-          router.replace(`/group/${groupId}` as any);
+        if (result.status === 'PENDING') {
+          setPending(result);
+          return;
+        }
+        // JOINED / ALREADY_MEMBER → mở nhóm
+        if (result.groupId) {
+          router.replace(`/group/${result.groupId}` as any);
         } else {
           router.replace('/(tabs)/groups' as any);
         }
@@ -48,12 +55,14 @@ export default function JoinByTokenScreen() {
       });
   }, [token, session, authLoading, router, queryClient]);
 
-  const loading = !displayError;
+  const loading = !displayError && !pending;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.center}>
-        {loading ? (
+        {pending ? (
+          <JoinPendingView result={pending} onDone={() => router.replace('/(tabs)/groups' as any)} />
+        ) : loading ? (
           <>
             <ActivityIndicator size="large" color="#007AFF" />
             <Text style={styles.loadingText}>

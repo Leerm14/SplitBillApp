@@ -50,6 +50,28 @@ export async function signOutSession(scope: 'local' | 'global' = 'local'): Promi
   if (error) throw error;
 }
 
+/** Migration 0015: một phiên đăng nhập (một thiết bị) của chính mình */
+export type MySession = {
+  id: string;
+  created_at: string;
+  last_active_at: string | null;
+  user_agent: string | null;
+  ip: string | null;
+  is_current: boolean;
+};
+
+export async function listMySessions(): Promise<MySession[]> {
+  const { data, error, status } = await supabase.rpc('list_my_sessions');
+  if (error) throwApiError(error, status);
+  return (data ?? []) as MySession[];
+}
+
+/** Đăng xuất một thiết bị khác (thiết bị đang dùng thì dùng signOutSession) */
+export async function revokeMySession(sessionId: string): Promise<void> {
+  const { error, status } = await supabase.rpc('revoke_my_session', { _session_id: sessionId });
+  if (error) throwApiError(error, status);
+}
+
 export async function updatePassword(newPassword: string): Promise<void> {
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) throw error;

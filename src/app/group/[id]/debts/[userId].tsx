@@ -263,7 +263,7 @@ export default function DebtDetailScreen() {
         {direction !== 'settled' && debtor === user?.id && explanation.amount > 0 && (
           <View style={styles.card}>
             <Text style={styles.handlesTitle}>Chuyển cho {getName(creditor)}</Text>
-            <RecipientPaymentHandles userId={creditor} name={getName(creditor)} />
+            <RecipientPaymentHandles userId={creditor} name={getName(creditor)} prefill={{ amount: explanation.amount }} />
           </View>
         )}
 

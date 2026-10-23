@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { fetchGroup, updateGroup, type Group } from '@/api/groups';
+import { fetchGroup, setJoinApproval, updateGroup, type Group } from '@/api/groups';
 import { destroyImage, uploadImage } from '@/api/images';
 import { Avatar } from '@/components/avatar';
 import { isSimplifyEnabled } from '@/domain/suggest';
@@ -113,6 +113,19 @@ export default function EditGroupScreen() {
       onRemove: removeImage,
     });
 
+  // Migration 0014: duyệt thành viên mới — lưu ngay khi gạt (độc lập với nút Lưu), chỉ chủ nhóm
+  const isOwner = !!user && groupQ.data?.owner_id === user.id;
+  const approvalMutation = useMutation({
+    mutationFn: (required: boolean) => setJoinApproval(id, required),
+    onSuccess: (next) => applyGroup(next),
+    onError: (err) => {
+      Alert.alert('Lỗi', toUserMessage(err, 'Không thể đổi cài đặt duyệt thành viên'));
+    },
+  });
+  const requireApproval = approvalMutation.isPending
+    ? !!approvalMutation.variables
+    : !!groupQ.data?.require_approval;
+
   const mutation = useMutation({
     // Hợp đồng update_group: NULL = giữ nguyên → chỉ gửi trường đã đổi
     mutationFn: () => {
@@ -193,6 +206,25 @@ export default function EditGroupScreen() {
             <Switch
               value={simplifyDebts}
               onValueChange={setSimplifyDebts}
+              trackColor={{ false: '#E5E5EA', true: '#34C759' }}
+              thumbColor="#fff"
+            />
+          </View>
+
+          {/* Migration 0014: duyệt thành viên mới */}
+          <View style={styles.switchRow}>
+            <View style={styles.switchInfo}>
+              <Text style={styles.switchLabel}>Duyệt thành viên mới</Text>
+              <Text style={styles.switchDescription}>
+                Khi bật, người vào bằng link, mã nhóm hoặc QR phải chờ bạn duyệt. Lời mời đích danh bạn gửi thì vào
+                thẳng.
+              </Text>
+              {!isOwner && <Text style={styles.switchDescription}>Chỉ chủ nhóm đổi được cài đặt này.</Text>}
+            </View>
+            <Switch
+              value={requireApproval}
+              onValueChange={(v) => approvalMutation.mutate(v)}
+              disabled={!isOwner || approvalMutation.isPending}
               trackColor={{ false: '#E5E5EA', true: '#34C759' }}
               thumbColor="#fff"
             />

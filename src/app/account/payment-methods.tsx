@@ -6,6 +6,7 @@ import {
   FlatList,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -23,6 +24,15 @@ import {
   updatePaymentHandle,
   type PaymentHandle,
 } from '@/api/contacts';
+import {
+  bankHandleQR,
+  formatBankHandle,
+  normalizeAccountNumber,
+  parseBankHandle,
+  searchBanks,
+  VIETQR_BANKS,
+  type VietQRBank,
+} from '@/domain/vietqr';
 
 const HANDLE_TYPES = [
   { value: 'BANK', label: 'Ngân hàng' },
@@ -39,6 +49,18 @@ export default function PaymentMethodsScreen() {
   const [editing, setEditing] = useState<string | null>(null);
   const [formType, setFormType] = useState<string>('BANK');
   const [formText, setFormText] = useState('');
+  // Loại Ngân hàng: nhập tách ngân hàng / số tài khoản / tên để luôn dựng được mã VietQR
+  const [bankQuery, setBankQuery] = useState('');
+  const [formBank, setFormBank] = useState<VietQRBank | null>(null);
+  const [formAccount, setFormAccount] = useState('');
+  const [formAccountName, setFormAccountName] = useState('');
+
+  const resetBankFields = () => {
+    setBankQuery('');
+    setFormBank(null);
+    setFormAccount('');
+    setFormAccountName('');
+  };
 
   const handlesQ = useQuery({
     queryKey: ['myPaymentHandles'],
@@ -49,19 +71,34 @@ export default function PaymentMethodsScreen() {
     setEditing(null);
     setFormText('');
     setFormType('BANK');
+    resetBankFields();
   };
 
   const openAdd = () => {
     setFormType('BANK');
     setFormText('');
+    resetBankFields();
     setEditing('new');
   };
 
   const openEdit = (handle: PaymentHandle) => {
     setFormType(handle.type);
     setFormText(handle.display_text);
+    resetBankFields();
+    if (handle.type === 'BANK') {
+      // Dòng cũ nhập tự do: điền sẵn phần nhận ra được
+      const parsed = parseBankHandle(handle.display_text);
+      setFormBank(parsed.bank);
+      setFormAccount(parsed.accountNumber ?? '');
+      setFormAccountName(parsed.accountName);
+    }
     setEditing(handle.id);
   };
+
+  const isBank = formType === 'BANK';
+  const accountNumber = normalizeAccountNumber(formAccount);
+  const bankText = formBank && accountNumber ? formatBankHandle(formBank, accountNumber, formAccountName) : '';
+  const bankMatches = (bankQuery.trim() ? searchBanks(bankQuery) : VIETQR_BANKS).filter((b) => b.bin !== formBank?.bin);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['myPaymentHandles'] });
@@ -70,7 +107,7 @@ export default function PaymentMethodsScreen() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const text = normalizePaymentHandleText(formText);
+      const text = normalizePaymentHandleText(isBank ? bankText : formText);
       return editing && editing !== 'new'
         ? updatePaymentHandle(editing, formType, text)
         : addPaymentHandle(formType, text);
@@ -101,7 +138,7 @@ export default function PaymentMethodsScreen() {
     ]);
   };
 
-  const trimmedLength = formText.trim().length;
+  const trimmedLength = isBank ? bankText.length : formText.trim().length;
   const canSave = trimmedLength > 0 && trimmedLength <= PAYMENT_HANDLE_MAX_LENGTH && !saveMutation.isPending;
 
   const typeLabel = (type: string) => HANDLE_TYPES.find(t => t.value === type)?.label ?? type;
@@ -141,6 +178,13 @@ export default function PaymentMethodsScreen() {
               <View style={styles.handleInfo}>
                 <Text style={styles.handleType}>{typeLabel(item.type)}</Text>
                 <Text style={styles.handleText}>{item.display_text}</Text>
+                {item.type === 'BANK' ? (
+                  bankHandleQR(item.display_text) ? (
+                    <Text style={styles.qrOk}>✓ Bạn bè thấy mã QR chuyển khoản</Text>
+                  ) : (
+                    <Text style={styles.qrMissing}>⚠️ Chưa tạo được mã QR — bấm Sửa để chọn ngân hàng</Text>
+                  )
+                ) : null}
               </View>
               <View style={styles.rowActions}>
                 <Pressable style={styles.editBtn} onPress={() => openEdit(item)}>
@@ -189,23 +233,106 @@ export default function PaymentMethodsScreen() {
               ))}
             </View>
 
-            {/* Display text */}
-            <Text style={styles.fieldLabel}>Thông tin</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={formType === 'BANK' ? 'VD: Vietcombank - 1234567890 - Nguyễn Văn A' : 'VD: MoMo - 0901234567'}
-              placeholderTextColor="#999"
-              value={formText}
-              onChangeText={setFormText}
-              maxLength={PAYMENT_HANDLE_MAX_LENGTH}
-              multiline
-            />
-            <View style={styles.inputMeta}>
-              <Text style={styles.inputWarning}>{SECRET_WARNING}</Text>
-              <Text style={styles.counter}>
-                {trimmedLength}/{PAYMENT_HANDLE_MAX_LENGTH}
-              </Text>
-            </View>
+            {isBank ? (
+              <>
+                {/* Ngân hàng */}
+                <Text style={styles.fieldLabel}>Ngân hàng</Text>
+                {formBank ? (
+                  <View style={styles.selectedBank}>
+                    <Text style={styles.selectedBankText}>🏦 {formBank.name}</Text>
+                    <Pressable onPress={() => setFormBank(null)} hitSlop={8}>
+                      <Text style={styles.changeBankText}>Đổi</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Tìm ngân hàng: Vietcombank, MB, Techcombank..."
+                      placeholderTextColor="#999"
+                      value={bankQuery}
+                      onChangeText={setBankQuery}
+                      autoCorrect={false}
+                    />
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                      style={styles.bankScroll}
+                      contentContainerStyle={styles.bankRow}
+                    >
+                      {bankMatches.length === 0 ? (
+                        <Text style={styles.counter}>Không tìm thấy ngân hàng</Text>
+                      ) : (
+                        bankMatches.map((b) => (
+                          <Pressable
+                            key={b.bin}
+                            style={styles.typeChip}
+                            onPress={() => {
+                              setFormBank(b);
+                              setBankQuery('');
+                            }}
+                          >
+                            <Text style={styles.typeChipText}>{b.name}</Text>
+                          </Pressable>
+                        ))
+                      )}
+                    </ScrollView>
+                  </>
+                )}
+
+                {/* Số tài khoản */}
+                <Text style={[styles.fieldLabel, styles.fieldGap]}>Số tài khoản</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="VD: 1234567890"
+                  placeholderTextColor="#999"
+                  value={formAccount}
+                  onChangeText={setFormAccount}
+                  keyboardType="number-pad"
+                  maxLength={23}
+                />
+                {formAccount.trim() && !accountNumber ? (
+                  <Text style={styles.inputWarning}>Số tài khoản gồm 6–19 chữ số</Text>
+                ) : null}
+
+                {/* Tên chủ tài khoản */}
+                <Text style={[styles.fieldLabel, styles.fieldGap]}>Tên chủ tài khoản</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="VD: NGUYEN VAN A"
+                  placeholderTextColor="#999"
+                  value={formAccountName}
+                  onChangeText={setFormAccountName}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={60}
+                />
+                <View style={styles.inputMeta}>
+                  <Text style={styles.inputWarning}>{SECRET_WARNING}</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                {/* Display text */}
+                <Text style={styles.fieldLabel}>Thông tin</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="VD: MoMo - 0901234567"
+                  placeholderTextColor="#999"
+                  value={formText}
+                  onChangeText={setFormText}
+                  maxLength={PAYMENT_HANDLE_MAX_LENGTH}
+                  multiline
+                />
+                <View style={styles.inputMeta}>
+                  <Text style={styles.inputWarning}>{SECRET_WARNING}</Text>
+                  <Text style={styles.counter}>
+                    {trimmedLength}/{PAYMENT_HANDLE_MAX_LENGTH}
+                  </Text>
+                </View>
+              </>
+            )}
 
             <View style={styles.modalActions}>
               <Pressable style={styles.cancelBtn} onPress={closeForm}>
@@ -284,6 +411,21 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#1a1a1a', marginBottom: 20 },
   fieldLabel: { fontSize: 14, fontWeight: '600', color: '#1a1a1a', marginBottom: 8 },
   typeRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
+  fieldGap: { marginTop: 16 },
+  bankScroll: { marginTop: 8, flexGrow: 0 },
+  bankRow: { gap: 8, alignItems: 'center' },
+  selectedBank: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f2f2f7',
+    borderRadius: 12,
+    padding: 14,
+  },
+  selectedBankText: { fontSize: 16, color: '#1a1a1a', fontWeight: '500' },
+  changeBankText: { fontSize: 14, color: '#007AFF', fontWeight: '600' },
+  qrOk: { fontSize: 12, color: '#34C759', marginTop: 4 },
+  qrMissing: { fontSize: 12, color: '#FF9500', marginTop: 4 },
   typeChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,

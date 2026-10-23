@@ -7,6 +7,22 @@ import { fetchUnreadCount } from '@/api/notifications';
 import { useAuth } from '@/hooks/use-auth';
 import { Colors, Spacing, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
+/** Add friend button in header – navigates to /contacts/add */
+function AddFriendButton() {
+  const router = useRouter();
+  return (
+    <Pressable
+      onPress={() => router.push('/contacts/add' as any)}
+      style={styles.addFriendButton}
+      hitSlop={8}
+    >
+      <View style={styles.addFriendIcon}>
+        <Text style={styles.addFriendText}>+</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 /** Bell icon with unread badge – navigates to /notifications */
 function NotificationBell() {
   const router = useRouter();
@@ -88,6 +104,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => (
             <Text style={[styles.tabIcon, !focused && styles.tabIconInactive]}>👫</Text>
           ),
+          headerRight: () => <AddFriendButton />,
         }}
       />
       <Tabs.Screen
@@ -140,5 +157,26 @@ const styles = StyleSheet.create({
   },
   tabIconInactive: {
     opacity: 0.55,
+  },
+  addFriendButton: {
+    marginRight: Spacing.lg,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addFriendIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addFriendText: {
+    fontSize: 20,
+    color: Colors.textInverse,
+    fontWeight: FontWeights.semibold,
+    marginTop: -1,
   },
 });

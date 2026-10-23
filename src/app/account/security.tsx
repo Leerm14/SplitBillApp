@@ -10,12 +10,50 @@ import {
   View,
 } from 'react-native';
 
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
 import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
-import { deleteAccount } from '@/api/auth';
+import { deleteAccount, listMySessions, revokeMySession, type MySession } from '@/api/auth';
+import { describeUserAgent } from '@/lib/device-name';
+
+const SESSIONS_KEY = ['my-sessions'] as const;
+
+/** "14:05 23/10/2026" */
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())} ${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
 
 export default function SecurityScreen() {
-  const { changePassword, signOutAll, signOut } = useAuth();
+  const { changePassword, signOutAll, signOut, user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Migration 0015: các phiên đăng nhập (thiết bị) của chính mình
+  const sessionsQ = useQuery({
+    queryKey: SESSIONS_KEY,
+    queryFn: listMySessions,
+    enabled: !!user,
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (sessionId: string) => revokeMySession(sessionId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: SESSIONS_KEY }),
+    onError: (err) => Alert.alert('Lỗi', toUserMessage(err, 'Không thể đăng xuất thiết bị')),
+  });
+
+  const handleRevoke = (s: MySession) => {
+    Alert.alert(
+      'Đăng xuất thiết bị',
+      `Đăng xuất ${describeUserAgent(s.user_agent)}? Thiết bị đó sẽ phải đăng nhập lại (có thể mất tới 1 giờ để bị thoát hẳn).`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        { text: 'Đăng xuất', style: 'destructive', onPress: () => revokeMutation.mutate(s.id) },
+      ],
+    );
+  };
 
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -145,12 +183,50 @@ export default function SecurityScreen() {
         </View>
       </View>
 
-      {/* Đăng xuất khỏi mọi thiết bị */}
+      {/* Thiết bị đang đăng nhập (migration 0015) */}
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Đăng xuất khỏi mọi thiết bị</Text>
+        <Text style={styles.sectionTitle}>Thiết bị đang đăng nhập</Text>
         <Text style={styles.sectionDescription}>
-          Đăng xuất tài khoản khỏi tất cả các thiết bị đang đăng nhập.
+          Nếu thấy thiết bị lạ, hãy đăng xuất thiết bị đó và đổi mật khẩu.
         </Text>
+
+        {sessionsQ.isLoading ? (
+          <ActivityIndicator style={styles.sessionsLoading} color="#007AFF" />
+        ) : sessionsQ.error ? (
+          <Pressable onPress={() => sessionsQ.refetch()}>
+            <Text style={styles.sessionsError}>
+              {toUserMessage(sessionsQ.error, 'Không tải được danh sách thiết bị')} · Thử lại
+            </Text>
+          </Pressable>
+        ) : (
+          <View style={styles.sessionList}>
+            {(sessionsQ.data ?? []).map((s) => (
+              <View key={s.id} style={styles.sessionRow}>
+                <View style={styles.sessionInfo}>
+                  <Text style={styles.sessionName}>
+                    {describeUserAgent(s.user_agent)}
+                    {s.is_current ? <Text style={styles.currentBadge}>  · Thiết bị này</Text> : null}
+                  </Text>
+                  <Text style={styles.sessionMeta}>
+                    Hoạt động lúc {formatDateTime(s.last_active_at)}
+                    {s.ip ? ` · IP ${s.ip}` : ''}
+                  </Text>
+                  <Text style={styles.sessionMeta}>Đăng nhập lúc {formatDateTime(s.created_at)}</Text>
+                </View>
+                {!s.is_current && (
+                  <Pressable
+                    style={[styles.sessionButton, revokeMutation.isPending && styles.buttonDisabled]}
+                    onPress={() => handleRevoke(s)}
+                    disabled={revokeMutation.isPending}
+                  >
+                    <Text style={styles.sessionButtonText}>Đăng xuất</Text>
+                  </Pressable>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
         <Pressable style={styles.outlineButton} onPress={handleSignOutAll}>
           <Text style={styles.outlineButtonText}>Đăng xuất tất cả thiết bị</Text>
         </Pressable>
@@ -247,6 +323,55 @@ const styles = StyleSheet.create({
   outlineButtonText: {
     color: '#007AFF',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  sessionsLoading: {
+    marginVertical: 16,
+  },
+  sessionsError: {
+    color: '#FF3B30',
+    fontSize: 14,
+    marginBottom: 16,
+  },
+  sessionList: {
+    marginBottom: 16,
+  },
+  sessionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e5ea',
+    gap: 12,
+  },
+  sessionInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  sessionName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  currentBadge: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#34C759',
+  },
+  sessionMeta: {
+    fontSize: 13,
+    color: '#666',
+  },
+  sessionButton: {
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  sessionButtonText: {
+    color: '#FF3B30',
+    fontSize: 14,
     fontWeight: '600',
   },
   destructiveButton: {

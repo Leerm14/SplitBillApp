@@ -49,7 +49,8 @@ SELECT is(
   ARRAY(
     SELECT t || ':' || p FROM
       unnest(ARRAY['groups', 'group_members', 'group_invites', 'expenses', 'expense_shares',
-                   'payments', 'activity_logs', 'friendships', 'profiles', 'notifications']) t,
+                   'payments', 'activity_logs', 'friendships', 'profiles', 'notifications',
+                   'group_join_requests']) t,
       unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) p
     WHERE has_table_privilege('authenticated', ('public.' || t)::regclass, p)
     ORDER BY 1
@@ -117,14 +118,15 @@ SELECT is(
     ORDER BY 1
   ),
   ARRAY[
-    'accept_invite', 'accept_invite_by_id', 'can_read_receipt', 'can_view_profile', 'can_write_receipt',
-    'cancel_expense', 'cancel_payment', 'close_group', 'confirm_payment',
+    'accept_invite', 'accept_invite_by_id', 'accept_invite_by_id_v2', 'approve_join_request',
+    'can_read_receipt', 'can_view_profile', 'can_write_receipt',
+    'cancel_expense', 'cancel_join_request', 'cancel_payment', 'close_group', 'confirm_payment',
     'create_expense', 'create_group', 'create_invite', 'create_payment',
     'dispute_payment', 'find_user_by_code', 'get_my_profile', 'is_member', 'is_member_or_was_member',
-    'is_owner', 'join_group', 'leave_group',
-    'register_push_token', 'reject_payment', 'remove_member',
-    'respond_friend_request', 'respond_payment', 'revoke_invite', 'rotate_invite_code',
-    'search_users', 'send_friend_request', 'transfer_ownership', 'unfriend',
+    'is_owner', 'join_by_code', 'join_by_token', 'join_group', 'leave_group', 'list_join_requests',
+    'list_my_sessions', 'my_join_request', 'register_push_token', 'reject_join_request', 'reject_payment', 'remove_member',
+    'respond_friend_request', 'respond_payment', 'revoke_invite', 'revoke_my_session', 'rotate_invite_code',
+    'search_users', 'send_friend_request', 'set_join_approval', 'transfer_ownership', 'unfriend',
     'unregister_push_token', 'update_expense', 'update_group', 'update_profile'
   ]::text[],
   'AUDIT-09: authenticated executes exactly the RPC allowlist (internal helpers hidden)'
@@ -135,7 +137,10 @@ SELECT ok(
   AND NOT has_function_privilege('authenticated', 'public.assert_authenticated()', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'public.trigger_push_notification()', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE')
-  AND NOT has_function_privilege('authenticated', 'public.handle_auth_user_deleted()', 'EXECUTE'),
+  AND NOT has_function_privilege('authenticated', 'public.handle_auth_user_deleted()', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'public.process_join(uuid,uuid,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'public.reject_join_requests_on_close()', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'public.fill_notification_actor()', 'EXECUTE'),
   'AUDIT-10: internal helpers / trigger functions are not callable by authenticated'
 );
 

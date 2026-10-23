@@ -8,6 +8,8 @@
  * API secret chỉ nằm trong Edge Function. Xóa ảnh cũ cũng qua Edge Function {action:'destroy'}.
  */
 
+import { File } from 'expo-file-system';
+
 import { ApiError } from '@/api/errors';
 import { invokeFunction } from '@/api/functions';
 import { compressImage } from '@/lib/image-compress';
@@ -47,7 +49,9 @@ export async function uploadImage(kind: ImageKind, localUri: string, ids?: { gro
 
   // Chỉ gửi đúng các tham số đã ký (thêm tham số khác → Cloudinary báo sai chữ ký)
   const form = new FormData();
-  form.append('file', { uri: compressed.uri, name: 'upload.jpg', type: compressed.mimeType } as unknown as Blob);
+  // fetch mặc định của Expo (expo/fetch) không nhận phần tử kiểu React Native { uri, name, type }
+  // ("Unsupported FormDataPart implementation") — chỉ nhận Blob hoặc File của expo-file-system.
+  form.append('file', new File(compressed.uri));
   form.append('api_key', sign.api_key);
   form.append('timestamp', String(sign.timestamp));
   form.append('signature', sign.signature);

@@ -208,7 +208,7 @@ export default function DebtsOverviewScreen() {
                     </Pressable>
                     {/* MVP-07: mình là người trả → hiện phương thức thanh toán của người nhận */}
                     {t.from === user?.id && (
-                      <RecipientPaymentHandles userId={t.to} name={getName(t.to)} />
+                      <RecipientPaymentHandles userId={t.to} name={getName(t.to)} prefill={{ amount: t.amount }} />
                     )}
                   </View>
                 ))

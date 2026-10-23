@@ -11,6 +11,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { getSession } from '@/api/auth';
 import { getServerErrorCode, isRetryableError } from '@/api/errors';
 import { createExpense, uploadReceiptFile, type ExpenseShareInput } from '@/api/expenses';
+import { saveReceiptItems, type ExpenseSource } from '@/api/receipts';
 import {
   cancelPayment,
   confirmPayment,
@@ -20,6 +21,7 @@ import {
   rejectPayment,
 } from '@/api/payments';
 import { formatVND } from '@/domain/money';
+import type { ReceiptItem } from '@/domain/receipt';
 import { deleteLocalReceipt, localFileExists } from '@/lib/receipt-files';
 
 import { classifyFailure, isDueForAttempt, queueItemAgeMs } from './policy';
@@ -54,6 +56,10 @@ export type CreateExpensePayload = {
   receiptPath?: string;
   /** MVP-01: bản sao ảnh đã nén trong thư mục tài liệu; upload (upsert) trước khi gọi create_expense */
   localReceiptUri?: string;
+  /** OCR-02: các dòng hóa đơn người dùng đã kiểm tra; lưu sau create_expense (set_expense_receipt_items) */
+  receiptItems?: ReceiptItem[];
+  /** OCR-06: nguồn khoản chi khi có receiptItems (mặc định OCR) */
+  source?: ExpenseSource;
 };
 
 export type CreatePaymentPayload = {
@@ -98,10 +104,13 @@ const PAYMENT_TARGET_STATUS: Partial<Record<QueueAction, string>> = {
  *    - Lỗi khác (không có quyền, file hỏng…) → vẫn lưu khoản chi, không kèm ảnh.
  *    - Không còn bản sao (đã upload + dọn ở lần trước) → giữ receiptPath.
  * 2. create_expense (idempotency key chỉ so nhóm, nên receiptPath khác giữa các lần gửi không gây xung đột).
- * 3. Thành công → xóa bản sao.
+ * 3. OCR-02: có món hóa đơn → set_expense_receipt_items (ghi thay thế nên gửi lại an toàn).
+ *    - Lỗi tạm thời → ném lỗi; lần sau create_expense trả bản đã có rồi ghi lại món.
+ *    - Lỗi khác (chưa chạy migration 0017…) → khoản chi vẫn được lưu, chỉ thiếu danh sách món.
+ * 4. Thành công → xóa bản sao.
  */
 async function createExpenseFromQueue(p: CreateExpensePayload): Promise<unknown> {
-  const { localReceiptUri, ...params } = p;
+  const { localReceiptUri, receiptItems, source, ...params } = p;
   let receiptPath = params.receiptPath;
   if (localReceiptUri && receiptPath && localFileExists(localReceiptUri)) {
     try {
@@ -113,6 +122,15 @@ async function createExpenseFromQueue(p: CreateExpensePayload): Promise<unknown>
     }
   }
   const result = await createExpense({ ...params, receiptPath });
+  const expenseId = (result as { id?: string } | null)?.id;
+  if (expenseId && receiptItems && receiptItems.length > 0) {
+    try {
+      await saveReceiptItems(expenseId, receiptItems, source ?? 'OCR');
+    } catch (error) {
+      if (isRetryableError(error)) throw error;
+      console.warn('[Queue] Không lưu được món trên hóa đơn:', (error as Error)?.message);
+    }
+  }
   deleteLocalReceipt(localReceiptUri);
   return result;
 }

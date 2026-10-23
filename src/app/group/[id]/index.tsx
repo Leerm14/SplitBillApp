@@ -24,6 +24,7 @@ import { formatVND } from '@/domain/money';
 import { describeMyPosition } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupSettlement } from '@/hooks/use-group-settlement';
+import { useJoinRequests } from '@/hooks/use-join-requests';
 import { useGroupUnsyncedItems } from '@/hooks/use-offline-sync';
 import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 import { describeQueueItem, submitAction } from '@/offline';
@@ -63,6 +64,9 @@ export default function GroupDetailScreen() {
     queryError,
     refetchAll,
   } = useGroupSettlement(id);
+
+  // Migration 0014: số yêu cầu tham gia chờ duyệt (chỉ chủ nhóm) — hiện trên nút Thành viên
+  const pendingJoinCount = useJoinRequests(id, groupQ.data?.owner_id === user?.id).data?.length ?? 0;
 
   // REV-S10: server từ chối sửa / hủy khoản chi có người đã rời (PARTICIPANT_NOT_ACTIVE)
   const activeIds = new Set((membersQ.data ?? []).filter(isActiveMember).map((m) => m.id));
@@ -210,7 +214,7 @@ export default function GroupDetailScreen() {
           <View style={styles.quickActions}>
             {isViewerActive && (
               <Pressable style={styles.quickActionBtn} onPress={() => router.push(`/group/${id}/members` as any)}>
-                <Text style={styles.quickActionText}>👤 Thành viên</Text>
+                <Text style={styles.quickActionText}>👤 Thành viên{pendingJoinCount > 0 ? ` (${pendingJoinCount} chờ duyệt)` : ''}</Text>
               </Pressable>
             )}
             {canWrite && (

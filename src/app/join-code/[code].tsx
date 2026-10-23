@@ -5,7 +5,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { joinGroup } from '@/api/groups';
+import { joinByCode, type JoinResult } from '@/api/groups';
+import { JoinPendingView } from '@/components/join-pending';
 import { useAuth } from '@/hooks/use-auth';
 import { SHORT_CODE_RE } from '@/lib/app-links';
 
@@ -20,7 +21,9 @@ export default function JoinByCodeScreen() {
   const queryClient = useQueryClient();
   const { session, loading: authLoading } = useAuth();
   const [error, setError] = useState<string | null>(null);
-  // Mỗi mã chỉ gọi joinGroup một lần (effect có thể chạy lại khi phiên làm mới)
+  // Migration 0014: nhóm bật duyệt thành viên → chờ chủ nhóm duyệt, không vào nhóm
+  const [pending, setPending] = useState<JoinResult | null>(null);
+  // Mỗi mã chỉ gọi joinByCode một lần (effect có thể chạy lại khi phiên làm mới)
   const attemptedRef = useRef<string | null>(null);
 
   const validCode = SHORT_CODE_RE.test(code);
@@ -31,23 +34,29 @@ export default function JoinByCodeScreen() {
     if (attemptedRef.current === code) return;
     attemptedRef.current = code;
 
-    joinGroup(code)
-      .then((group: any) => {
+    joinByCode(code)
+      .then((result) => {
         queryClient.invalidateQueries({ queryKey: ['groups'] });
-        const groupId = typeof group === 'string' ? group : group?.id ?? group?.group_id;
-        router.replace((groupId ? `/group/${groupId}` : '/(tabs)/groups') as any);
+        if (result.status === 'PENDING') {
+          setPending(result);
+          return;
+        }
+        // JOINED / ALREADY_MEMBER → mở nhóm
+        router.replace((result.groupId ? `/group/${result.groupId}` : '/(tabs)/groups') as any);
       })
       .catch((err) => {
         setError(toUserMessage(err, 'Không thể tham gia nhóm. Mã mời có thể đã được đổi.'));
       });
   }, [code, validCode, session, authLoading, router, queryClient]);
 
-  const loading = !displayError;
+  const loading = !displayError && !pending;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.center}>
-        {loading ? (
+        {pending ? (
+          <JoinPendingView result={pending} onDone={() => router.replace('/(tabs)/groups' as any)} />
+        ) : loading ? (
           <>
             <ActivityIndicator size="large" color="#007AFF" />
             <Text style={styles.loadingText}>

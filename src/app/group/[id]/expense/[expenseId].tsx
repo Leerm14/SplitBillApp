@@ -15,8 +15,10 @@ import {
 import { toUserMessage } from '@/api/errors';
 import { cancelExpense, fetchExpense } from '@/api/expenses';
 import { isActiveMember } from '@/api/groups';
+import { fetchReceiptItems } from '@/api/receipts';
 import { ReceiptViewer } from '@/components/receipt-image';
 import { formatVND } from '@/domain/money';
+import { RECEIPT_KIND_LABEL, receiptSum } from '@/domain/receipt';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupAccess } from '@/hooks/use-group-settlement';
 import { useReceiptUrl } from '@/hooks/use-receipt-url';
@@ -38,6 +40,13 @@ export default function ExpenseDetailScreen() {
   const receiptQ = useReceiptUrl(expenseQ.data?.receipt_path);
   const receiptUrl = receiptQ.data ?? null;
   const [receiptFullscreen, setReceiptFullscreen] = useState(false);
+  // OCR-02: món đọc từ hóa đơn (migration 0017). Lỗi (vd. server chưa có bảng) → không hiện mục này
+  const receiptItemsQ = useQuery({
+    queryKey: ['receipt-items', expenseId],
+    queryFn: () => fetchReceiptItems(expenseId),
+    retry: false,
+  });
+  const receiptItems = receiptItemsQ.data ?? [];
 
   const handleCancel = () => {
     Alert.alert('Hủy khoản chi', 'Bạn có chắc muốn hủy khoản chi này?', [
@@ -193,6 +202,38 @@ export default function ExpenseDetailScreen() {
         </View>
       ) : null}
       <ReceiptViewer uri={receiptUrl} visible={receiptFullscreen} onClose={() => setReceiptFullscreen(false)} />
+
+      {/* OCR-02 / OCR-06: các dòng trên hóa đơn người tạo đã kiểm tra */}
+      {receiptItems.length > 0 ? (
+        <View style={styles.card}>
+          <View style={styles.receiptHeader}>
+            <Text style={styles.cardLabel}>Chi tiết hóa đơn</Text>
+            <Text style={styles.ocrBadge}>Đọc từ hóa đơn</Text>
+          </View>
+          {receiptItems.map((it) => (
+            <View key={it.id} style={styles.shareRow}>
+              <Text style={[styles.shareName, styles.receiptItemName]} numberOfLines={2}>
+                {it.kind === 'ITEM'
+                  ? `${it.quantity > 1 ? `${it.quantity} × ` : ''}${it.name}`
+                  : `${RECEIPT_KIND_LABEL[it.kind]}: ${it.name}`}
+              </Text>
+              <Text style={styles.shareAmount}>
+                {it.kind === 'DISCOUNT' ? '−' : ''}
+                {formatVND(it.amount)}
+              </Text>
+            </View>
+          ))}
+          <View style={[styles.shareRow, styles.receiptTotalRow]}>
+            <Text style={styles.shareName}>Tổng các dòng</Text>
+            <Text style={styles.shareAmount}>{formatVND(receiptSum(receiptItems))}</Text>
+          </View>
+          {receiptSum(receiptItems) !== Number(expense.amount) ? (
+            <Text style={styles.receiptNote}>
+              Số tiền khoản chi ({formatVND(Number(expense.amount))}) là số người tạo đã xác nhận.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* Card 5: Thông tin */}
       <View style={styles.card}>
@@ -390,5 +431,19 @@ const styles = StyleSheet.create({
 
   // MVP-01: ảnh hóa đơn
   receiptThumb: { width: '100%', height: 200, borderRadius: 8 },
+  receiptHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  ocrBadge: {
+    fontSize: 11,
+    color: '#007AFF',
+    fontWeight: '600',
+    backgroundColor: '#e5f0ff',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  receiptTotalRow: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ddd', marginTop: 4, paddingTop: 8 },
+  receiptNote: { fontSize: 12, color: '#8E8E93', marginTop: 4 },
+  receiptItemName: { flex: 1, marginRight: 8 },
   receiptError: { fontSize: 14, color: '#FF3B30' },
 });

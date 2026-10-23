@@ -226,11 +226,15 @@ export default function PayScreen() {
           ))}
         </View>
 
-        {/* MVP-07: phương thức thanh toán của người nhận, có nút sao chép */}
+        {/* MVP-07: phương thức thanh toán của người nhận — ngân hàng hiện mã VietQR kèm số tiền / ghi chú đang nhập */}
         {toId ? (
           <View style={styles.handlesBox}>
             <Text style={styles.handlesTitle}>Thông tin chuyển khoản của {getName(toId)}</Text>
-            <RecipientPaymentHandles userId={toId} name={getName(toId)} />
+            <RecipientPaymentHandles
+              userId={toId}
+              name={getName(toId)}
+              prefill={{ amount: isAmountValid ? amount : null, memo: note.trim() || null }}
+            />
           </View>
         ) : null}
 

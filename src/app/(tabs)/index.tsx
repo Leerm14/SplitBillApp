@@ -317,7 +317,8 @@ export default function HomeScreen() {
       {mostRecentGroupId && (
         <Pressable
           style={styles.fab}
-          onPress={() => router.push(`/group/${mostRecentGroupId}/add-expense` as any)}
+          // Mặc định nhóm mới nhất, người dùng đổi nhóm ngay trong màn thêm khoản chi
+          onPress={() => router.push(`/group/${mostRecentGroupId}/add-expense?pickGroup=1` as any)}
         >
           <Text style={styles.fabText}>+</Text>
         </Pressable>

@@ -29,6 +29,7 @@ import {
   type MemberPosition,
 } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
+import { useGroupRealtime } from '@/hooks/use-realtime';
 
 /** REV-S6: key bắt đầu bằng 'groups' để mọi chỗ ghi invalidate ['groups'] cũng làm mới số dư của view */
 export function groupBalancesKey(groupId: string) {
@@ -68,6 +69,9 @@ export function useGroupAccess(groupId: string) {
     queryFn: () => fetchGroupMembers(groupId),
     enabled: !!groupId && !!user,
   });
+
+  // Realtime: mọi màn của nhóm đều đi qua hook này → nghe thay đổi của nhóm khi đang mở (một kênh dùng chung)
+  useGroupRealtime(groupId, !!user);
 
   const me = membersQ.data?.find((m) => m.id === user?.id);
   // Chưa tải được danh sách → chưa kết luận (không chặn nhầm khi đang tải)

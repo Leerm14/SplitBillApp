@@ -192,7 +192,7 @@ export default function ContactsScreen() {
             </View>
             <Text style={styles.emptyText}>Chưa có bạn bè nào</Text>
             <Text style={styles.emptyHint}>
-              Nhấn nút + để tìm và thêm bạn bè
+              Nhấn nút + ở góc phải trên cùng để tìm và thêm bạn bè
             </Text>
           </View>
         }
@@ -216,14 +216,6 @@ export default function ContactsScreen() {
           );
         }}
       />
-
-      {/* FAB */}
-      <Pressable
-        style={styles.fab}
-        onPress={() => router.push('/contacts/add' as any)}
-      >
-        <Text style={styles.fabText}>+</Text>
-      </Pressable>
     </SafeAreaView>
   );
 }
@@ -255,7 +247,7 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md,
     color: Colors.text,
   },
-  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 80 },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.lg },
 
   // Pending section
   pendingSection: {
@@ -394,25 +386,5 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
     textAlign: 'center',
     lineHeight: 20,
-  },
-
-  // FAB
-  fab: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: Radii.full,
-    backgroundColor: Colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Shadows.colored(Colors.primary),
-  },
-  fabText: {
-    fontSize: 28,
-    color: Colors.textInverse,
-    fontWeight: FontWeights.regular,
-    marginTop: -2,
   },
 });

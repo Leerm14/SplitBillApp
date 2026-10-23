@@ -38,6 +38,9 @@ if (Notifications) {
 function pathFromNotificationData(data: any): string | null {
   // MVP-06: lời mời đích danh — người nhận chưa là thành viên, mở màn Thông báo để xác nhận tham gia
   if (data?.type === 'GROUP_INVITED') return '/notifications';
+  // Migration 0014: chủ nhóm mở danh sách yêu cầu chờ duyệt; bị từ chối thì không vào được nhóm
+  if (data?.type === 'JOIN_REQUESTED' && data?.group_id) return `/group/${data.group_id}/members`;
+  if (data?.type === 'JOIN_REJECTED') return '/notifications';
   if (data?.expense_id && data?.group_id) return `/group/${data.group_id}/expense/${data.expense_id}`;
   if (data?.payment_id) return `/payment/${data.payment_id}`;
   if (data?.group_id) return `/group/${data.group_id}`;

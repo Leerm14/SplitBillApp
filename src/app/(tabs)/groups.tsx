@@ -16,9 +16,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
-import { joinGroup } from '@/api/groups';
+import { joinByCode } from '@/api/groups';
 import { Avatar } from '@/components/avatar';
 import { ErrorState } from '@/components/error-state';
+import { showJoinPendingAlert } from '@/components/join-pending';
 import { useGroupsList } from '@/hooks/use-groups';
 import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
@@ -43,11 +44,13 @@ export default function GroupsScreen() {
     }
     setSubmitting(true);
     try {
-      const group = await joinGroup(inviteCode.trim());
+      const result = await joinByCode(inviteCode.trim());
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       setShowJoin(false);
       setInviteCode('');
-      router.push(`/group/${group.id}` as any);
+      // Migration 0014: nhóm bật duyệt thành viên → chờ chủ nhóm duyệt, không mở nhóm
+      if (result.status === 'PENDING') showJoinPendingAlert(result, queryClient);
+      else router.push(`/group/${result.groupId}` as any);
     } catch (err: any) {
       Alert.alert('Lỗi', toUserMessage(err, 'Mã mời không hợp lệ'));
     } finally {

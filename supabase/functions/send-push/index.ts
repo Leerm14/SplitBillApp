@@ -35,7 +35,8 @@ const corsHeaders = {
 // `INSERT INTO public.notifications` trong supabase/migrations 0001–0012):
 //   EXPENSE_CREATED/UPDATED/CANCELLED, PAYMENT_CREATED/CONFIRMED/REJECTED/DISPUTED/
 //   CANCELLED, MEMBER_JOINED/LEFT/REMOVED, OWNERSHIP_RECEIVED/TRANSFERRED,
-//   FRIEND_REQUEST/ACCEPTED/DECLINED, GROUP_INVITED (0012, kèm invite_id).
+//   FRIEND_REQUEST/ACCEPTED/DECLINED, GROUP_INVITED (0012, kèm invite_id),
+//   JOIN_REQUESTED/APPROVED/REJECTED (0014, kèm group_id; actor = người xin / chủ nhóm).
 // Thêm loại mới trong migration → thêm vào đây (loại lạ rơi về nội dung chung).
 function getNotificationContent(
   type: string,
@@ -64,6 +65,10 @@ function getNotificationContent(
     OWNERSHIP_TRANSFERRED: { title: 'Đã chuyển quyền chủ nhóm', body: `Bạn đã chuyển quyền chủ nhóm${group}` },
     // Lời mời đích danh (MVP-06): "<tên người mời> mời bạn vào nhóm <tên nhóm>"
     GROUP_INVITED: { title: 'Lời mời vào nhóm', body: `${actor} mời bạn vào nhóm${group}` },
+    // Duyệt yêu cầu tham gia (0014)
+    JOIN_REQUESTED: { title: 'Yêu cầu tham gia nhóm', body: `${actor} muốn tham gia nhóm${group}` },
+    JOIN_APPROVED: { title: 'Đã được duyệt vào nhóm', body: `Bạn đã được duyệt vào nhóm${group}` },
+    JOIN_REJECTED: { title: 'Yêu cầu tham gia bị từ chối', body: `Yêu cầu tham gia nhóm${group} bị từ chối` },
     // Bạn bè
     FRIEND_REQUEST: { title: 'Lời mời kết bạn', body: `${actor} muốn kết bạn với bạn` },
     FRIEND_ACCEPTED: { title: 'Đã trở thành bạn bè', body: `${actor} đã chấp nhận lời mời kết bạn` },
@@ -181,7 +186,7 @@ Deno.serve(async (req) => {
       groupName = group?.name;
     }
 
-    // Tên người thực hiện (thông báo bạn bè, MEMBER_JOINED, GROUP_INVITED)
+    // Tên người thực hiện (thông báo bạn bè, MEMBER_JOINED, GROUP_INVITED, JOIN_REQUESTED)
     let actorName: string | undefined;
     if (record.actor_id) {
       const { data: actor } = await supabase
@@ -203,6 +208,7 @@ Deno.serve(async (req) => {
       data: {
         notification_id: record.id,
         type: record.type,
+        // JOIN_*: app mở nhóm / màn duyệt yêu cầu theo group_id
         group_id: record.group_id,
         expense_id: record.expense_id,
         payment_id: record.payment_id,
