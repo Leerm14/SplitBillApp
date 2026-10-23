@@ -6,6 +6,8 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { Colors, Spacing, Radii, FontSizes, FontWeights } from '@/lib/theme';
+
 interface Props {
   title?: string;
   message?: string | null;
@@ -29,22 +31,44 @@ export function ErrorState({ title = 'Không thể tải dữ liệu', message, 
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, gap: 8 },
-  inline: {
-    backgroundColor: '#FFEBEE',
-    borderRadius: 12,
-    padding: 16,
+  center: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
+    padding: Spacing.xxl,
+    gap: Spacing.md,
   },
-  title: { fontSize: 16, color: '#FF3B30', textAlign: 'center', fontWeight: '600' },
-  message: { fontSize: 14, color: '#8E8E93', textAlign: 'center' },
+  inline: {
+    backgroundColor: Colors.dangerLight,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.danger + '30',
+  },
+  title: {
+    fontSize: FontSizes.md,
+    color: Colors.danger,
+    textAlign: 'center',
+    fontWeight: FontWeights.semibold,
+  },
+  message: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   retryBtn: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 10,
-    marginTop: 4,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.xxl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.md,
+    marginTop: Spacing.xs,
   },
-  retryBtnText: { color: '#fff', fontWeight: '600' },
+  retryBtnText: {
+    color: Colors.textInverse,
+    fontWeight: FontWeights.semibold,
+    fontSize: FontSizes.sm,
+  },
 });

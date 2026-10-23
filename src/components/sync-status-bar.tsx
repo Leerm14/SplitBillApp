@@ -11,6 +11,7 @@ import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { QueueItem } from '@/offline/queue';
+import { Colors, Spacing, Radii, FontSizes, FontWeights } from '@/lib/theme';
 
 interface Props {
   pendingCount: number;
@@ -130,39 +131,39 @@ export function SyncStatusBar({
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: '#FFF8E1',
+    backgroundColor: Colors.warningLight,
     borderBottomWidth: 1,
-    borderBottomColor: '#FFE082',
+    borderBottomColor: Colors.warning,
   },
   container: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8,
+    gap: Spacing.sm,
   },
-  text: { fontSize: 13, color: '#F57F17' },
-  textWarning: { fontSize: 13, color: '#E65100', flex: 1 },
-  timestamp: { fontSize: 11, color: '#F9A825' },
+  text: { fontSize: FontSizes.sm, color: Colors.warningDark },
+  textWarning: { fontSize: FontSizes.sm, color: Colors.warningDark, flex: 1 },
+  timestamp: { fontSize: FontSizes.xs, color: Colors.warning },
 
   failedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: Spacing.sm,
     paddingVertical: 6,
-    paddingHorizontal: 16,
+    paddingHorizontal: Spacing.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#FFE082',
+    borderTopColor: Colors.warning,
   },
   failedInfo: { flex: 1, gap: 2 },
-  pendingTitle: { fontSize: 13, color: '#E65100', fontWeight: '500' },
-  toggleRow: { paddingHorizontal: 16, paddingBottom: 6 },
-  toggleText: { fontSize: 12, color: '#007AFF', fontWeight: '500' },
-  failedTitle: { fontSize: 13, color: '#C62828', fontWeight: '500' },
-  failedError: { fontSize: 12, color: '#8E8E93' },
-  retryBtn: { backgroundColor: '#007AFF', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
-  retryBtnText: { color: '#fff', fontSize: 12, fontWeight: '600' },
-  discardBtn: { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#FF3B30' },
-  discardBtnText: { color: '#FF3B30', fontSize: 12, fontWeight: '600' },
+  pendingTitle: { fontSize: FontSizes.sm, color: Colors.warningDark, fontWeight: FontWeights.medium },
+  toggleRow: { paddingHorizontal: Spacing.lg, paddingBottom: 6 },
+  toggleText: { fontSize: 12, color: Colors.primary, fontWeight: FontWeights.medium },
+  failedTitle: { fontSize: FontSizes.sm, color: Colors.dangerDark, fontWeight: FontWeights.medium },
+  failedError: { fontSize: 12, color: Colors.textSecondary },
+  retryBtn: { backgroundColor: Colors.primary, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
+  retryBtnText: { color: Colors.textInverse, fontSize: 12, fontWeight: FontWeights.semibold },
+  discardBtn: { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: Colors.danger },
+  discardBtnText: { color: Colors.danger, fontSize: 12, fontWeight: FontWeights.semibold },
 });

@@ -1,10 +1,11 @@
 import { Tabs, useRouter } from 'expo-router';
 import React from 'react';
-import { Platform, Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
 import { fetchUnreadCount } from '@/api/notifications';
 import { useAuth } from '@/hooks/use-auth';
+import { Colors, Spacing, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
 /** Bell icon with unread badge – navigates to /notifications */
 function NotificationBell() {
@@ -21,26 +22,13 @@ function NotificationBell() {
   return (
     <Pressable
       onPress={() => router.push('/notifications' as any)}
-      style={{ marginRight: 16, position: 'relative' }}
+      style={styles.bellButton}
       hitSlop={8}
     >
-      <Text style={{ fontSize: 22 }}>🔔</Text>
+      <Text style={styles.bellIcon}>🔔</Text>
       {(unreadCount ?? 0) > 0 && (
-        <View
-          style={{
-            position: 'absolute',
-            top: -4,
-            right: -6,
-            backgroundColor: '#FF3B30',
-            borderRadius: 9,
-            minWidth: 18,
-            height: 18,
-            justifyContent: 'center',
-            alignItems: 'center',
-            paddingHorizontal: 4,
-          }}
-        >
-          <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>
             {(unreadCount ?? 0) > 99 ? '99+' : unreadCount}
           </Text>
         </View>
@@ -53,14 +41,22 @@ export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: '#007AFF',
-        tabBarInactiveTintColor: '#8E8E93',
+        tabBarActiveTintColor: Colors.primary,
+        tabBarInactiveTintColor: Colors.textTertiary,
         tabBarStyle: Platform.select({
-          ios: { position: 'absolute' },
-          default: {},
+          ios: {
+            position: 'absolute',
+            backgroundColor: Colors.surface,
+            borderTopColor: Colors.borderLight,
+          },
+          default: {
+            backgroundColor: Colors.surface,
+            borderTopColor: Colors.borderLight,
+          },
         }),
-        headerStyle: { backgroundColor: '#fff' },
-        headerTitleStyle: { fontWeight: '600' },
+        headerStyle: { backgroundColor: Colors.surface },
+        headerTitleStyle: { fontWeight: FontWeights.semibold, color: Colors.text },
+        headerShadowVisible: false,
       }}
     >
       <Tabs.Screen
@@ -69,7 +65,7 @@ export default function TabsLayout() {
           title: 'Tổng quan',
           tabBarLabel: 'Home',
           tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.6 }}>🏠</Text>
+            <Text style={[styles.tabIcon, !focused && styles.tabIconInactive]}>🏠</Text>
           ),
           headerRight: () => <NotificationBell />,
         }}
@@ -80,7 +76,7 @@ export default function TabsLayout() {
           title: 'Nhóm',
           tabBarLabel: 'Nhóm',
           tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.6 }}>👥</Text>
+            <Text style={[styles.tabIcon, !focused && styles.tabIconInactive]}>👥</Text>
           ),
         }}
       />
@@ -90,7 +86,7 @@ export default function TabsLayout() {
           title: 'Bạn bè',
           tabBarLabel: 'Bạn bè',
           tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.6 }}>👫</Text>
+            <Text style={[styles.tabIcon, !focused && styles.tabIconInactive]}>👫</Text>
           ),
         }}
       />
@@ -100,10 +96,49 @@ export default function TabsLayout() {
           title: 'Tài khoản',
           tabBarLabel: 'Tài khoản',
           tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.6 }}>👤</Text>
+            <Text style={[styles.tabIcon, !focused && styles.tabIconInactive]}>👤</Text>
           ),
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  bellButton: {
+    marginRight: Spacing.lg,
+    position: 'relative',
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellIcon: {
+    fontSize: 22,
+  },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    backgroundColor: Colors.danger,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.xs,
+    borderWidth: 2,
+    borderColor: Colors.surface,
+  },
+  badgeText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.xs,
+    fontWeight: FontWeights.bold,
+  },
+  tabIcon: {
+    fontSize: 22,
+  },
+  tabIconInactive: {
+    opacity: 0.55,
+  },
+});

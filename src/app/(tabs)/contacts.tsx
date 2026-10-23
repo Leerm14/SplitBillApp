@@ -18,6 +18,7 @@ import { toUserMessage } from '@/api/errors';
 import { fetchFriends, fetchPendingRequests, respondFriendRequest } from '@/api/contacts';
 import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
 type FriendProfile = {
   id: string;
@@ -98,7 +99,7 @@ export default function ContactsScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={Colors.primary} />
       </View>
     );
   }
@@ -109,13 +110,16 @@ export default function ContactsScreen() {
     <SafeAreaView style={styles.container} edges={['bottom']}>
       {/* Search bar */}
       <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Tìm bạn bè..."
-          placeholderTextColor="#999"
-          value={search}
-          onChangeText={setSearch}
-        />
+        <View style={styles.searchInputWrap}>
+          <Text style={styles.searchIcon}>🔍</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Tìm bạn bè..."
+            placeholderTextColor={Colors.textTertiary}
+            value={search}
+            onChangeText={setSearch}
+          />
+        </View>
       </View>
 
       <FlatList
@@ -123,14 +127,19 @@ export default function ContactsScreen() {
         keyExtractor={(item: any) => `${item.requester_id}-${item.addressee_id}`}
         contentContainerStyle={styles.list}
         refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={Colors.primary} />
         }
         ListHeaderComponent={
           hasPending ? (
             <View style={styles.pendingSection}>
-              <Text style={styles.sectionTitle}>
-                Lời mời kết bạn ({pendingRequests!.length})
-              </Text>
+              <View style={styles.pendingSectionHeader}>
+                <View style={styles.pendingBadge}>
+                  <Text style={styles.pendingBadgeText}>{pendingRequests!.length}</Text>
+                </View>
+                <Text style={styles.sectionTitle}>
+                  Lời mời kết bạn
+                </Text>
+              </View>
               {pendingRequests!.map((req: any) => {
                 const requester = req.requester as FriendProfile;
                 return (
@@ -178,7 +187,9 @@ export default function ContactsScreen() {
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>👫</Text>
+            <View style={styles.emptyIconWrap}>
+              <Text style={styles.emptyIcon}>👫</Text>
+            </View>
             <Text style={styles.emptyText}>Chưa có bạn bè nào</Text>
             <Text style={styles.emptyHint}>
               Nhấn nút + để tìm và thêm bạn bè
@@ -218,108 +229,172 @@ export default function ContactsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f7' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: { flex: 1, backgroundColor: Colors.background },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   searchContainer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
+  },
+  searchInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.borderLight,
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+  },
+  searchIcon: {
+    fontSize: FontSizes.md,
+    marginRight: Spacing.sm,
   },
   searchInput: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    color: '#1a1a1a',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    flex: 1,
+    paddingVertical: Spacing.md,
+    fontSize: FontSizes.md,
+    color: Colors.text,
   },
-  list: { padding: 16, gap: 8, paddingBottom: 80 },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 80 },
 
   // Pending section
   pendingSection: {
-    marginBottom: 16,
-    gap: 8,
+    marginBottom: Spacing.lg,
+    gap: Spacing.sm,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
+  },
+  pendingSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: Spacing.xs,
+  },
+  pendingBadge: {
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.full,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pendingBadgeText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.xs,
+    fontWeight: FontWeights.bold,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1a1a1a',
-    marginBottom: 4,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.bold,
+    color: Colors.primaryDark,
   },
   pendingCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadows.sm,
   },
   pendingInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: Spacing.md,
   },
   pendingMeta: { flex: 1 },
   pendingActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: Spacing.sm,
   },
   acceptBtn: {
     flex: 1,
-    backgroundColor: '#34C759',
-    borderRadius: 10,
-    paddingVertical: 10,
+    backgroundColor: Colors.success,
+    borderRadius: Radii.sm,
+    paddingVertical: Spacing.md,
     alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  acceptBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  acceptBtnText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
+  },
   declineBtn: {
     flex: 1,
-    backgroundColor: '#f2f2f7',
-    borderRadius: 10,
-    paddingVertical: 10,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.sm,
+    paddingVertical: Spacing.md,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: Colors.border,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  declineBtnText: { color: '#666', fontSize: 14, fontWeight: '600' },
+  declineBtnText: {
+    color: Colors.textSecondary,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
+  },
 
   // Friend card
   friendCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    ...Shadows.sm,
   },
   friendRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: Spacing.md,
     flex: 1,
   },
   friendMeta: { flex: 1 },
-  friendName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
-  friendCode: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  arrow: { fontSize: 22, color: '#C7C7CC', fontWeight: '300' },
+  friendName: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+  },
+  friendCode: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  arrow: { fontSize: 22, color: Colors.textTertiary, fontWeight: FontWeights.regular },
 
   // Empty
-  empty: { alignItems: 'center', paddingTop: 40 },
-  emptyIcon: { fontSize: 48, marginBottom: 12 },
-  emptyText: { fontSize: 16, color: '#666' },
-  emptyHint: { fontSize: 14, color: '#999', marginTop: 4 },
+  empty: {
+    alignItems: 'center',
+    paddingTop: 60,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  emptyIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: Radii.full,
+    backgroundColor: Colors.primaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+  },
+  emptyIcon: { fontSize: 36 },
+  emptyText: {
+    fontSize: FontSizes.lg,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  emptyHint: {
+    fontSize: FontSizes.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.sm,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
 
   // FAB
   fab: {
@@ -328,15 +403,16 @@ const styles = StyleSheet.create({
     right: 20,
     width: 56,
     height: 56,
-    borderRadius: 28,
-    backgroundColor: '#007AFF',
+    borderRadius: Radii.full,
+    backgroundColor: Colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
+    ...Shadows.colored(Colors.primary),
   },
-  fabText: { fontSize: 28, color: '#fff', fontWeight: '400', marginTop: -2 },
+  fabText: {
+    fontSize: 28,
+    color: Colors.textInverse,
+    fontWeight: FontWeights.regular,
+    marginTop: -2,
+  },
 });

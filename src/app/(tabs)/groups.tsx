@@ -20,6 +20,7 @@ import { joinGroup } from '@/api/groups';
 import { Avatar } from '@/components/avatar';
 import { ErrorState } from '@/components/error-state';
 import { useGroupsList } from '@/hooks/use-groups';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
 export default function GroupsScreen() {
   const router = useRouter();
@@ -57,7 +58,7 @@ export default function GroupsScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={Colors.primary} />
       </View>
     );
   }
@@ -92,15 +93,23 @@ export default function GroupsScreen() {
           contentContainerStyle={styles.list}
           stickySectionHeadersEnabled={false}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); }} />
+            <RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); }} tintColor={Colors.primary} />
           }
           renderSectionHeader={({ section }) =>
-            section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
+            section.title ? (
+              <View style={styles.sectionTitleRow}>
+                <View style={styles.sectionTitleLine} />
+                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <View style={styles.sectionTitleLine} />
+              </View>
+            ) : null
           }
           renderSectionFooter={({ section }) =>
             section.key === 'active' && section.data.length === 0 ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyIcon}>👥</Text>
+                <View style={styles.emptyIconWrap}>
+                  <Text style={styles.emptyIcon}>👥</Text>
+                </View>
                 <Text style={styles.emptyText}>Chưa có nhóm nào đang hoạt động</Text>
                 <Text style={styles.emptyHint}>Tạo nhóm mới hoặc nhập mã mời để bắt đầu</Text>
               </View>
@@ -120,9 +129,10 @@ export default function GroupsScreen() {
                 style={[styles.card, archived && styles.cardArchived]}
                 onPress={() => router.push(`/group/${item.id}` as any)}
               >
+                <View style={[styles.cardBorder, archived && styles.cardBorderArchived]} />
                 <Avatar name={item.name} path={item.avatar_path} seed={item.id} size={44} style={styles.groupAvatar} />
                 <View style={styles.cardInfo}>
-                  <Text style={styles.groupName}>{item.name}</Text>
+                  <Text style={[styles.groupName, archived && styles.groupNameArchived]}>{item.name}</Text>
                   <Text style={styles.groupMeta}>
                     {archived
                       ? archivedReason
@@ -140,11 +150,15 @@ export default function GroupsScreen() {
       <Modal visible={showJoin} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Tham gia nhóm</Text>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalHeaderAccent} />
+              <Text style={styles.modalTitle}>Tham gia nhóm</Text>
+              <Text style={styles.modalSubtitle}>Nhập mã mời từ chủ nhóm để tham gia</Text>
+            </View>
             <TextInput
               style={styles.input}
               placeholder="Mã mời (8 ký tự)"
-              placeholderTextColor="#999"
+              placeholderTextColor={Colors.textTertiary}
               value={inviteCode}
               onChangeText={setInviteCode}
               autoCapitalize="characters"
@@ -161,7 +175,7 @@ export default function GroupsScreen() {
                 disabled={submitting}
               >
                 {submitting ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <ActivityIndicator color={Colors.textInverse} size="small" />
                 ) : (
                   <Text style={styles.modalConfirmText}>Tham gia</Text>
                 )}
@@ -175,88 +189,199 @@ export default function GroupsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f7' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: { flex: 1, backgroundColor: Colors.background },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   actions: {
     flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
   },
   actionBtn: {
     flex: 1,
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
     alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   actionBtnSecondary: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#007AFF',
+    backgroundColor: Colors.surface,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
   },
-  actionBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  actionBtnTextSecondary: { color: '#007AFF' },
-  list: { padding: 16, gap: 8 },
-  empty: { alignItems: 'center', paddingTop: 40 },
-  emptyIcon: { fontSize: 48, marginBottom: 12 },
-  emptyText: { fontSize: 16, color: '#666' },
-  emptyHint: { fontSize: 14, color: '#999', marginTop: 4 },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  actionBtnText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+  },
+  actionBtnTextSecondary: { color: Colors.primary },
+  scanBtn: { flex: 0, paddingHorizontal: Spacing.lg },
+  list: { padding: Spacing.lg, gap: Spacing.sm },
+  empty: {
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    paddingTop: 60,
+    paddingHorizontal: Spacing.xxxl,
   },
-  cardArchived: { opacity: 0.7 },
+  emptyIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: Radii.full,
+    backgroundColor: Colors.primaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+  },
+  emptyIcon: { fontSize: 36 },
+  emptyText: {
+    fontSize: FontSizes.lg,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  emptyHint: {
+    fontSize: FontSizes.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.sm,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  card: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+    ...Shadows.sm,
+  },
+  cardArchived: { opacity: 0.6 },
+  cardBorder: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+    backgroundColor: Colors.primary,
+    borderTopLeftRadius: Radii.lg,
+    borderBottomLeftRadius: Radii.lg,
+  },
+  cardBorderArchived: {
+    backgroundColor: Colors.textTertiary,
+  },
   cardInfo: { flex: 1 },
-  groupAvatar: { marginRight: 12 },
-  scanBtn: { flex: 0, paddingHorizontal: 16 },
-  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#8E8E93', marginTop: 12, marginBottom: 4 },
-  groupName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
-  groupMeta: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  arrow: { fontSize: 22, color: '#C7C7CC', fontWeight: '300' },
+  groupAvatar: { marginRight: Spacing.md },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
+  },
+  sectionTitleLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  sectionTitle: {
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  groupName: {
+    fontSize: FontSizes.lg,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+  },
+  groupNameArchived: {
+    color: Colors.textSecondary,
+  },
+  groupMeta: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  arrow: { fontSize: 22, color: Colors.textTertiary, fontWeight: FontWeights.regular },
 
   // Modal styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: Colors.overlay,
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: Spacing.xxl,
   },
   modal: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    gap: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.xl,
+    padding: Spacing.xxl,
+    gap: Spacing.lg,
+    ...Shadows.lg,
   },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#1a1a1a' },
+  modalHeader: {
+    gap: Spacing.xs,
+  },
+  modalHeaderAccent: {
+    width: 40,
+    height: 4,
+    borderRadius: Radii.full,
+    backgroundColor: Colors.primary,
+    marginBottom: Spacing.sm,
+  },
+  modalTitle: {
+    fontSize: FontSizes.xl,
+    fontWeight: FontWeights.bold,
+    color: Colors.text,
+  },
+  modalSubtitle: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
-    color: '#1a1a1a',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
+    fontSize: FontSizes.lg,
+    backgroundColor: Colors.borderLight,
+    color: Colors.text,
+    letterSpacing: 2,
+    fontWeight: FontWeights.semibold,
+    textAlign: 'center',
   },
-  modalActions: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end' },
-  modalCancel: { padding: 12 },
-  modalCancelText: { fontSize: 16, color: '#666' },
+  modalActions: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    justifyContent: 'flex-end',
+    marginTop: Spacing.sm,
+  },
+  modalCancel: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radii.md,
+  },
+  modalCancelText: {
+    fontSize: FontSizes.md,
+    color: Colors.textSecondary,
+    fontWeight: FontWeights.medium,
+  },
   modalConfirm: {
-    backgroundColor: '#007AFF',
-    borderRadius: 10,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
+    paddingHorizontal: Spacing.xxl,
+    paddingVertical: Spacing.md,
+    minWidth: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  modalConfirmText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  modalConfirmText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+  },
   buttonDisabled: { opacity: 0.6 },
 });

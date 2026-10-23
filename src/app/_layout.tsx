@@ -16,6 +16,7 @@ import { resumableRoute } from '@/lib/app-links';
 import { onPendingLinkChange, peekPendingLink, setPendingLink, takePendingLink } from '@/lib/pending-link';
 import { persistOptions, queryClientConfig } from '@/lib/query-persister';
 import { describeQueueItem } from '@/offline/sync';
+import { Colors } from '@/lib/theme';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -106,8 +107,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     // Hiển thị loading indicator thay vì blank screen
     // SplashScreen vẫn đang hiện phía trên, nhưng phòng trường hợp nó hide sớm
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#208AEF' }}>
-        <ActivityIndicator size="large" color="#fff" />
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.primary }}>
+        <ActivityIndicator size="large" color={Colors.textInverse} />
       </View>
     );
   }
@@ -118,7 +119,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     <View style={styles.root}>
       {showBar && (
         // REV-A6: thanh nằm dưới thanh trạng thái hệ thống — tự đệm phần tai thỏ / status bar
-        <View style={{ paddingTop: insets.top, backgroundColor: '#FFF8E1' }}>
+        <View style={{ paddingTop: insets.top, backgroundColor: Colors.warningLight }}>
           <SyncStatusBar
             pendingCount={pendingCount}
             pendingItems={pendingItems}
@@ -149,9 +150,9 @@ function RootStack() {
       screenOptions={{
         headerShown: false,
         headerBackTitle: 'Quay lại',
-        headerStyle: { backgroundColor: '#fff' },
+        headerStyle: { backgroundColor: Colors.surface },
         headerTitleStyle: { fontWeight: '600' },
-        headerTintColor: '#007AFF',
+        headerTintColor: Colors.primary,
       }}
     >
       <Stack.Protected guard={signedIn} redirectTo="/(auth)/sign-in">

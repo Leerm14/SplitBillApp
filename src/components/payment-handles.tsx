@@ -9,6 +9,7 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { fetchPaymentHandles, type PaymentHandle } from '@/api/contacts';
+import { Colors, Spacing, Radii, FontSizes, FontWeights } from '@/lib/theme';
 
 export const PAYMENT_HANDLE_TYPE_LABEL: Record<string, string> = {
   BANK: 'Ngân hàng',
@@ -79,7 +80,7 @@ export function RecipientPaymentHandles({
     queryFn: () => fetchPaymentHandles(userId),
     enabled: !!userId,
   });
-  if (q.isLoading) return <ActivityIndicator size="small" color="#8E8E93" style={styles.loading} />;
+  if (q.isLoading) return <ActivityIndicator size="small" color={Colors.textTertiary} style={styles.loading} />;
   const handles = q.data ?? [];
   if (handles.length === 0) {
     if (hideWhenEmpty || q.isError) return null;
@@ -93,19 +94,19 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#f7f7fa',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    gap: Spacing.md - 2,
+    backgroundColor: Colors.borderLight,
+    borderRadius: Radii.sm + 2,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
   },
   info: { flex: 1 },
-  type: { fontSize: 11, color: '#8E8E93', textTransform: 'uppercase', fontWeight: '600' },
-  text: { fontSize: 14, color: '#1a1a1a', marginTop: 2 },
-  copyBtn: { borderWidth: 1, borderColor: '#007AFF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  copyBtnDone: { borderColor: '#34C759', backgroundColor: '#E8F8EC' },
-  copyText: { fontSize: 12, color: '#007AFF', fontWeight: '600' },
-  copyTextDone: { color: '#34C759' },
-  loading: { alignSelf: 'flex-start', marginVertical: 4 },
-  empty: { fontSize: 12, color: '#8E8E93', fontStyle: 'italic' },
+  type: { fontSize: FontSizes.xs, color: Colors.textTertiary, textTransform: 'uppercase', fontWeight: FontWeights.semibold },
+  text: { fontSize: FontSizes.md - 1, color: Colors.text, marginTop: 2 },
+  copyBtn: { borderWidth: 1, borderColor: Colors.primary, borderRadius: Radii.sm, paddingHorizontal: 10, paddingVertical: 5 },
+  copyBtnDone: { borderColor: Colors.success, backgroundColor: Colors.successLight },
+  copyText: { fontSize: 12, color: Colors.primary, fontWeight: FontWeights.semibold },
+  copyTextDone: { color: Colors.success },
+  loading: { alignSelf: 'flex-start', marginVertical: Spacing.xs },
+  empty: { fontSize: 12, color: Colors.textTertiary, fontStyle: 'italic' },
 });

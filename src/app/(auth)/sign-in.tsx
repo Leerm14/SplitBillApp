@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/use-auth';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
 export default function SignInScreen() {
   const { signIn } = useAuth();
@@ -43,15 +44,22 @@ export default function SignInScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.content}
       >
-        <Text style={styles.icon}>💰</Text>
-        <Text style={styles.title}>Split Bill</Text>
-        <Text style={styles.subtitle}>Chia tiền nhóm dễ dàng</Text>
+        {/* Hero section with premium icon area */}
+        <View style={styles.heroSection}>
+          <View style={styles.iconCircleOuter}>
+            <View style={styles.iconCircleInner}>
+              <Text style={styles.icon}>💰</Text>
+            </View>
+          </View>
+          <Text style={styles.title}>Split Bill</Text>
+          <Text style={styles.subtitle}>Chia tiền nhóm dễ dàng</Text>
+        </View>
 
         <View style={styles.form}>
           <TextInput
             style={styles.input}
             placeholder="Email"
-            placeholderTextColor="#999"
+            placeholderTextColor={Colors.textTertiary}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -61,7 +69,7 @@ export default function SignInScreen() {
           <TextInput
             style={styles.input}
             placeholder="Mật khẩu"
-            placeholderTextColor="#999"
+            placeholderTextColor={Colors.textTertiary}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
@@ -74,7 +82,7 @@ export default function SignInScreen() {
             disabled={loading}
           >
             {loading ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={Colors.textInverse} />
             ) : (
               <Text style={styles.buttonText}>Đăng nhập</Text>
             )}
@@ -87,9 +95,9 @@ export default function SignInScreen() {
           </Link>
 
           <Link href={'/(auth)/sign-up' as any} asChild>
-            <Pressable style={styles.linkButton}>
-              <Text style={styles.linkText}>
-                Chưa có tài khoản? <Text style={styles.linkBold}>Đăng ký</Text>
+            <Pressable style={styles.signUpButton}>
+              <Text style={styles.signUpButtonText}>
+                Chưa có tài khoản? Đăng ký
               </Text>
             </Pressable>
           </Link>
@@ -102,68 +110,103 @@ export default function SignInScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.background,
   },
   content: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: Spacing.xxl,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: '700',
-    textAlign: 'center',
-    color: '#1a1a1a',
+  heroSection: {
+    alignItems: 'center',
+    marginBottom: Spacing.xxxl + Spacing.sm,
+  },
+  iconCircleOuter: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.xl,
+  },
+  iconCircleInner: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: Colors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   icon: {
-    fontSize: 56,
+    fontSize: 40,
+  },
+  title: {
+    fontSize: FontSizes.xxxl,
+    fontWeight: FontWeights.bold,
     textAlign: 'center',
-    marginBottom: 12,
+    color: Colors.text,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: FontSizes.md,
+    color: Colors.textSecondary,
     textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 40,
+    marginTop: Spacing.sm,
   },
   form: {
-    gap: 16,
+    gap: Spacing.lg,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
-    color: '#1a1a1a',
+    borderColor: Colors.border,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
+    fontSize: FontSizes.md,
+    backgroundColor: Colors.borderLight,
+    color: Colors.text,
   },
   button: {
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: Spacing.sm,
+    ...Shadows.colored(Colors.primary),
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    color: Colors.textInverse,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
   },
   linkButton: {
     alignItems: 'center',
-    padding: 12,
+    paddingVertical: Spacing.md,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   linkText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
   },
   linkBold: {
-    color: '#007AFF',
-    fontWeight: '600',
+    color: Colors.primary,
+    fontWeight: FontWeights.semibold,
+  },
+  signUpButton: {
+    alignItems: 'center',
+    backgroundColor: Colors.success,
+    borderRadius: Radii.md,
+    paddingVertical: Spacing.md,
+    minHeight: 44,
+    justifyContent: 'center',
+    ...Shadows.colored(Colors.success),
+  },
+  signUpButtonText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
   },
 });

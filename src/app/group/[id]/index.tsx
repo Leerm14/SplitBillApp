@@ -25,9 +25,10 @@ import { describeMyPosition } from '@/domain/suggest';
 import { useAuth } from '@/hooks/use-auth';
 import { useGroupSettlement } from '@/hooks/use-group-settlement';
 import { useGroupUnsyncedItems } from '@/hooks/use-offline-sync';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 import { describeQueueItem, submitAction } from '@/offline';
 
-const AVATAR_COLORS = ['#007AFF', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#FF3B30', '#5856D6'];
+const AVATAR_COLORS = [Colors.primary, Colors.success, Colors.warning, '#AF52DE', '#FF2D55', '#5AC8FA', Colors.danger, '#5856D6'];
 
 const PAYMENT_STATUS_LABEL: Record<string, string> = {
   PENDING: '⏳ Chờ xác nhận',
@@ -140,7 +141,7 @@ export default function GroupDetailScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={Colors.primary} />
       </View>
     );
   }
@@ -166,18 +167,23 @@ export default function GroupDetailScreen() {
           <RefreshControl
             refreshing={groupQ.isRefetching || expensesQ.isRefetching}
             onRefresh={refetchAll}
+            tintColor={Colors.primary}
           />
         }
       >
         {/* Header nhóm */}
         <View style={styles.groupHeader}>
+          {/* Decorative teal overlay layer */}
+          <View style={styles.headerOverlay} />
           {/* MVP-03: ảnh nhóm */}
-          <Avatar name={groupQ.data?.name} path={groupQ.data?.avatar_path} seed={id} size={64} />
+          <View style={styles.avatarWrapper}>
+            <Avatar name={groupQ.data?.name} path={groupQ.data?.avatar_path} seed={id} size={68} />
+          </View>
           <Text style={styles.groupName}>{groupQ.data?.name}</Text>
           {groupQ.data?.description ? (
             <Text style={styles.groupDescription}>{groupQ.data.description}</Text>
           ) : null}
-          <Pressable onPress={handleShareInvite}>
+          <Pressable onPress={handleShareInvite} style={styles.inviteChip}>
             <Text style={styles.inviteCode}>📋 Mã mời: {groupQ.data?.invite_code}</Text>
           </Pressable>
 
@@ -190,7 +196,7 @@ export default function GroupDetailScreen() {
                   name={m.displayName || m.id.slice(0, 8)}
                   path={m.avatarPath}
                   color={AVATAR_COLORS[index % AVATAR_COLORS.length]}
-                  size={32}
+                  size={34}
                   style={[styles.memberAvatar, { marginLeft: index > 0 ? -8 : 0 }]}
                 />
               ))}
@@ -254,19 +260,21 @@ export default function GroupDetailScreen() {
           </View>
         )}
 
-        {/* Tabs */}
-        <View style={styles.tabs}>
-          {(['debts', 'expenses', 'payments'] as const).map((tab) => (
-            <Pressable
-              key={tab}
-              style={[styles.tab, activeTab === tab && styles.tabActive]}
-              onPress={() => setActiveTab(tab)}
-            >
-              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-                {tab === 'debts' ? '⚖️ Công nợ' : tab === 'expenses' ? '🧾 Khoản chi' : '💳 Thanh toán'}
-              </Text>
-            </Pressable>
-          ))}
+        {/* Tabs — segmented control */}
+        <View style={styles.tabsWrapper}>
+          <View style={styles.tabs}>
+            {(['debts', 'expenses', 'payments'] as const).map((tab) => (
+              <Pressable
+                key={tab}
+                style={[styles.tab, activeTab === tab && styles.tabActive]}
+                onPress={() => setActiveTab(tab)}
+              >
+                <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                  {tab === 'debts' ? '⚖️ Công nợ' : tab === 'expenses' ? '🧾 Khoản chi' : '💳 Thanh toán'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
 
         {/* APP-08: Thao tác chưa gửi được lên máy chủ */}
@@ -297,12 +305,14 @@ export default function GroupDetailScreen() {
 
         {activeTab === 'debts' && isViewerActive && settlementError && (
           <View style={styles.section}>
-            <ErrorState
-              inline
-              title="Không tính được công nợ"
-              message="Số liệu của nhóm không khớp (tổng số dư khác 0 hoặc thiếu thành viên). Lỗi đã được ghi lại."
-              onRetry={refetchAll}
-            />
+            <View style={styles.errorBox}>
+              <ErrorState
+                inline
+                title="Không tính được công nợ"
+                message="Số liệu của nhóm không khớp (tổng số dư khác 0 hoặc thiếu thành viên). Lỗi đã được ghi lại."
+                onRetry={refetchAll}
+              />
+            </View>
           </View>
         )}
 
@@ -318,8 +328,8 @@ export default function GroupDetailScreen() {
             {/* REV-S6: số tự tính khi không tải được view group_balances */}
             {isUnsynced && <Text style={styles.unsyncedLabel}>⚠️ Chưa đồng bộ — số dư tính trên dữ liệu đã lưu trên máy</Text>}
             <Text style={styles.sectionTitle}>Số dư chính thức</Text>
-            {[...settlement.officialBal.entries()].map(([userId, balance]) => (
-              <View key={userId} style={styles.balanceRow}>
+            {[...settlement.officialBal.entries()].map(([userId, balance], index) => (
+              <View key={userId} style={[styles.balanceRow, index % 2 === 1 && styles.balanceRowAlt]}>
                 <Text style={styles.balanceName}>
                   {getName(userId)}
                   {userId === user?.id ? ' (bạn)' : ''}
@@ -336,7 +346,7 @@ export default function GroupDetailScreen() {
               </View>
             ))}
 
-            <Text style={[styles.sectionTitle, { marginTop: 20 }]}>
+            <Text style={[styles.sectionTitle, { marginTop: Spacing.xl }]}>
               {settlement.simplify ? 'Gợi ý tất toán' : 'Gợi ý tất toán (từng cặp)'}
             </Text>
             {settlement.suggestions.length === 0 ? (
@@ -369,7 +379,7 @@ export default function GroupDetailScreen() {
 
             {pendingPayments.length > 0 && (
               <>
-                <Text style={[styles.sectionTitle, { marginTop: 20 }]}>⏳ Đang chờ xác nhận</Text>
+                <Text style={[styles.sectionTitle, { marginTop: Spacing.xl }]}>⏳ Đang chờ xác nhận</Text>
                 {pendingPayments.map((p) => (
                   <View key={p.id} style={styles.pendingRow}>
                     <Text style={styles.pendingText}>
@@ -410,10 +420,14 @@ export default function GroupDetailScreen() {
                 <Text style={styles.emptyStateHint}>Nhấn &quot;+ Khoản chi&quot; để thêm chi phí đầu tiên</Text>
               </View>
             ) : (
-              (expensesQ.data || []).map((e) => (
+              (expensesQ.data || []).map((e, index) => (
                 <Pressable
                   key={e.id}
-                  style={[styles.expenseCard, e.status === 'CANCELLED' && styles.cancelled]}
+                  style={[
+                    styles.expenseCard,
+                    e.status === 'CANCELLED' && styles.cancelled,
+                    index < (expensesQ.data || []).length - 1 && styles.expenseCardBorder,
+                  ]}
                   onPress={() => router.push(`/group/${id}/expense/${e.id}` as any)}
                 >
                   <View style={styles.expenseHeader}>
@@ -471,9 +485,18 @@ export default function GroupDetailScreen() {
                     </Text>
                     <Text style={styles.paymentAmount}>{formatVND(Number(p.amount))}</Text>
                   </View>
-                  <Text style={styles.paymentStatus}>
-                    {PAYMENT_STATUS_LABEL[p.status] ?? p.status}
-                  </Text>
+                  <View style={styles.paymentStatusBadge}>
+                    <Text style={[
+                      styles.paymentStatusText,
+                      p.status === 'CONFIRMED' && styles.paymentStatusConfirmed,
+                      p.status === 'REJECTED' && styles.paymentStatusRejected,
+                      p.status === 'PENDING' && styles.paymentStatusPending,
+                      p.status === 'DISPUTED' && styles.paymentStatusDisputed,
+                      p.status === 'CANCELLED' && styles.paymentStatusCancelled,
+                    ]}>
+                      {PAYMENT_STATUS_LABEL[p.status] ?? p.status}
+                    </Text>
+                  </View>
                   {p.note ? <Text style={styles.paymentNote}>&ldquo;{p.note}&rdquo;</Text> : null}
                   <Text style={styles.paymentDate}>
                     {new Date(p.created_at).toLocaleDateString('vi-VN', {
@@ -504,148 +527,469 @@ export default function GroupDetailScreen() {
             )}
           </View>
         )}
+
+        {/* Bottom spacer for scroll breathing */}
+        <View style={styles.bottomSpacer} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f7' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: { flex: 1, backgroundColor: Colors.background },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
 
-  groupHeader: { padding: 20, backgroundColor: '#fff', alignItems: 'center', gap: 4 },
-  groupName: { fontSize: 22, fontWeight: '700', color: '#1a1a1a' },
-  groupDescription: { fontSize: 14, color: '#666', textAlign: 'center' },
-  inviteCode: { fontSize: 14, color: '#007AFF', fontWeight: '500' },
+  // ── Group Header ──────────────────────────────────────────────
+  groupHeader: {
+    paddingTop: Spacing.xxl,
+    paddingBottom: Spacing.xl,
+    paddingHorizontal: Spacing.xl,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    gap: Spacing.xs,
+    overflow: 'hidden',
+    ...Shadows.sm,
+  },
+  headerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+    backgroundColor: Colors.primaryLight,
+    opacity: 0.5,
+  },
+  avatarWrapper: {
+    marginBottom: Spacing.sm,
+    borderRadius: Radii.full,
+    padding: 3,
+    borderWidth: 2,
+    borderColor: Colors.primaryMuted,
+  },
+  groupName: {
+    fontSize: FontSizes.xxl,
+    fontWeight: FontWeights.bold,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  groupDescription: {
+    fontSize: FontSizes.md,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  inviteChip: {
+    marginTop: Spacing.xs,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radii.full,
+  },
+  inviteCode: {
+    fontSize: FontSizes.sm,
+    color: Colors.primaryDark,
+    fontWeight: FontWeights.medium,
+  },
   memberAvatars: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: Spacing.md,
     gap: 0,
   },
-  memberAvatar: { borderWidth: 2, borderColor: '#fff' },
-  memberCount: { fontSize: 13, color: '#8E8E93', marginLeft: 8 },
+  memberAvatar: { borderWidth: 2, borderColor: Colors.surface },
+  memberCount: { fontSize: FontSizes.sm, color: Colors.textSecondary, marginLeft: Spacing.sm },
 
-  actions: { flexDirection: 'row', gap: 12, padding: 16 },
+  // ── Action Buttons ────────────────────────────────────────────
+  actions: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+  },
   actionBtn: {
-    flex: 1, backgroundColor: '#007AFF', borderRadius: 12,
-    padding: 14, alignItems: 'center',
+    flex: 1,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
+    paddingVertical: Spacing.lg,
+    alignItems: 'center',
+    ...Shadows.md,
   },
-  actionBtnGreen: { backgroundColor: '#34C759' },
-  actionBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  actionBtnGreen: {
+    backgroundColor: Colors.success,
+    ...Shadows.colored(Colors.success),
+  },
+  actionBtnText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+  },
 
-  tabs: { flexDirection: 'row', paddingHorizontal: 16, gap: 6, marginBottom: 8 },
+  // ── Tabs (Segmented Control) ──────────────────────────────────
+  tabsWrapper: {
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  tabs: {
+    flexDirection: 'row',
+    backgroundColor: Colors.borderLight,
+    borderRadius: Radii.md,
+    padding: 3,
+  },
   tab: {
-    flex: 1, paddingVertical: 10, alignItems: 'center',
-    borderRadius: 10, backgroundColor: '#e5e5ea',
+    flex: 1,
+    paddingVertical: Spacing.sm + 2,
+    alignItems: 'center',
+    borderRadius: Radii.sm + 2,
   },
-  tabActive: { backgroundColor: '#007AFF' },
-  tabText: { fontSize: 13, fontWeight: '500', color: '#666' },
-  tabTextActive: { color: '#fff' },
+  tabActive: {
+    backgroundColor: Colors.primary,
+    ...Shadows.sm,
+  },
+  tabText: {
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.medium,
+    color: Colors.textSecondary,
+  },
+  tabTextActive: {
+    color: Colors.textInverse,
+    fontWeight: FontWeights.semibold,
+  },
 
-  section: { padding: 16, gap: 8 },
-  sectionTitle: { fontSize: 17, fontWeight: '600', color: '#1a1a1a', marginBottom: 4 },
+  // ── Section / General ─────────────────────────────────────────
+  section: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: Spacing.sm },
+  sectionTitle: {
+    fontSize: FontSizes.lg,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+    marginBottom: Spacing.xs,
+  },
 
-  // Empty states
-  emptyState: { alignItems: 'center', paddingVertical: 40 },
-  emptyStateIcon: { fontSize: 48, marginBottom: 12 },
-  emptyStateText: { fontSize: 16, color: '#666', fontWeight: '500' },
-  emptyStateHint: { fontSize: 14, color: '#999', marginTop: 4 },
+  // ── Empty states ──────────────────────────────────────────────
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xxxl + 8,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    marginVertical: Spacing.sm,
+  },
+  emptyStateIcon: { fontSize: 48, marginBottom: Spacing.md },
+  emptyStateText: {
+    fontSize: FontSizes.lg,
+    color: Colors.textSecondary,
+    fontWeight: FontWeights.medium,
+  },
+  emptyStateHint: {
+    fontSize: FontSizes.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.xs,
+    textAlign: 'center',
+    paddingHorizontal: Spacing.xxl,
+  },
 
-  // Debts
+  // ── Error box ─────────────────────────────────────────────────
+  errorBox: {
+    backgroundColor: Colors.dangerLight,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
+  },
+
+  // ── Debts Tab ─────────────────────────────────────────────────
   balanceRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    backgroundColor: '#fff', padding: 14, borderRadius: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md + 2,
+    borderRadius: Radii.sm,
   },
-  balanceName: { fontSize: 15, color: '#1a1a1a' },
-  balanceAmount: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
-  positive: { color: '#34C759' },
-  negative: { color: '#FF3B30' },
-  settledBox: { backgroundColor: '#E8F5E9', padding: 20, borderRadius: 12, alignItems: 'center' },
-  settledText: { fontSize: 16, color: '#2E7D32', fontWeight: '500' },
+  balanceRowAlt: {
+    backgroundColor: Colors.borderLight,
+  },
+  balanceName: { fontSize: FontSizes.md, color: Colors.text, fontWeight: FontWeights.regular },
+  balanceAmount: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text },
+  positive: { color: Colors.success },
+  negative: { color: Colors.danger },
+  settledBox: {
+    backgroundColor: Colors.successLight,
+    padding: Spacing.xl,
+    borderRadius: Radii.md,
+    alignItems: 'center',
+  },
+  settledText: {
+    fontSize: FontSizes.lg,
+    color: Colors.successDark,
+    fontWeight: FontWeights.medium,
+  },
   suggestionRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    backgroundColor: '#FFF8E1', padding: 14, borderRadius: 10,
-    borderLeftWidth: 4, borderLeftColor: '#FFB300',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.accentLight,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md + 2,
+    borderRadius: Radii.sm,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.accentDark,
   },
-  suggestionText: { fontSize: 15, color: '#5D4037', fontWeight: '500' },
-  suggestionAmount: { fontSize: 15, fontWeight: '700', color: '#E65100' },
+  suggestionText: {
+    fontSize: FontSizes.md,
+    color: Colors.accentDark,
+    fontWeight: FontWeights.medium,
+    flex: 1,
+  },
+  suggestionAmount: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.bold,
+    color: Colors.accentDark,
+  },
   pendingRow: {
-    backgroundColor: '#E3F2FD', padding: 14, borderRadius: 10, gap: 4,
-    borderLeftWidth: 4, borderLeftColor: '#42A5F5',
+    backgroundColor: Colors.infoLight,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.sm,
+    gap: Spacing.xs,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.info,
   },
-  pendingText: { fontSize: 14, color: '#1565C0', fontWeight: '500' },
-  pendingStatus: { fontSize: 13, color: '#42A5F5' },
+  pendingText: {
+    fontSize: FontSizes.sm,
+    color: Colors.info,
+    fontWeight: FontWeights.medium,
+  },
+  pendingStatus: { fontSize: FontSizes.sm, color: Colors.info, opacity: 0.8 },
 
-  // Expenses
-  expenseCard: { backgroundColor: '#fff', padding: 14, borderRadius: 10, gap: 6 },
+  // ── Expenses Tab ──────────────────────────────────────────────
+  expenseCard: {
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md + 2,
+    borderRadius: Radii.md,
+    gap: Spacing.xs + 2,
+  },
+  expenseCardBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
   cancelled: { opacity: 0.5 },
   cancelledText: { textDecorationLine: 'line-through' },
-  expenseHeader: { flexDirection: 'row', justifyContent: 'space-between' },
-  expenseDesc: { fontSize: 15, fontWeight: '500', color: '#1a1a1a', flex: 1 },
-  expenseAmount: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
-  expenseMeta: { fontSize: 13, color: '#8E8E93' },
-  sharesContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  shareItem: { fontSize: 12, color: '#666', backgroundColor: '#f2f2f7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  cancelBtn: { alignSelf: 'flex-start', marginTop: 4, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: '#FF3B30' },
-  cancelBtnText: { color: '#FF3B30', fontSize: 13, fontWeight: '500' },
+  expenseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  expenseDesc: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.medium,
+    color: Colors.text,
+    flex: 1,
+    marginRight: Spacing.sm,
+  },
+  expenseAmount: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+  },
+  expenseMeta: { fontSize: FontSizes.sm, color: Colors.textTertiary },
+  sharesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  shareItem: {
+    fontSize: FontSizes.xs,
+    color: Colors.textSecondary,
+    backgroundColor: Colors.borderLight,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: Radii.sm - 2,
+  },
+  cancelBtn: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.xs,
+    paddingVertical: Spacing.xs + 2,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radii.sm,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+  },
+  cancelBtnText: {
+    color: Colors.danger,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.medium,
+  },
 
-  // Payments
-  paymentCard: { backgroundColor: '#fff', padding: 14, borderRadius: 10, gap: 4 },
-  paymentHeader: { flexDirection: 'row', justifyContent: 'space-between' },
-  paymentText: { fontSize: 15, fontWeight: '500', color: '#1a1a1a', flex: 1 },
-  paymentAmount: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
-  paymentStatus: { fontSize: 13 },
-  paymentNote: { fontSize: 13, color: '#8E8E93', fontStyle: 'italic' },
-  paymentDate: { fontSize: 12, color: '#C7C7CC' },
-  respondActions: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  // ── Payments Tab ──────────────────────────────────────────────
+  paymentCard: {
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md + 2,
+    borderRadius: Radii.md,
+    gap: Spacing.xs,
+    ...Shadows.sm,
+  },
+  paymentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  paymentText: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.medium,
+    color: Colors.text,
+    flex: 1,
+  },
+  paymentAmount: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+  },
+  paymentStatusBadge: {
+    alignSelf: 'flex-start',
+  },
+  paymentStatusText: {
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.medium,
+    color: Colors.textSecondary,
+  },
+  paymentStatusConfirmed: { color: Colors.success },
+  paymentStatusRejected: { color: Colors.danger },
+  paymentStatusPending: { color: Colors.warning },
+  paymentStatusDisputed: { color: Colors.warningDark },
+  paymentStatusCancelled: { color: Colors.textTertiary },
+  paymentNote: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    fontStyle: 'italic',
+  },
+  paymentDate: { fontSize: FontSizes.xs, color: Colors.textTertiary },
+  respondActions: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    marginTop: Spacing.sm,
+  },
   confirmBtn: {
-    flex: 1, backgroundColor: '#34C759', borderRadius: 8,
-    padding: 10, alignItems: 'center',
+    flex: 1,
+    backgroundColor: Colors.success,
+    borderRadius: Radii.sm,
+    paddingVertical: Spacing.sm + 2,
+    alignItems: 'center',
+    ...Shadows.sm,
   },
-  confirmBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  confirmBtnText: {
+    color: Colors.textInverse,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
+  },
   rejectBtn: {
-    flex: 1, backgroundColor: '#fff', borderRadius: 8,
-    padding: 10, alignItems: 'center', borderWidth: 1, borderColor: '#FF3B30',
-  },
-  rejectBtnText: { color: '#FF3B30', fontSize: 14, fontWeight: '600' },
-
-  // Quick actions
-  quickActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  quickActionBtn: { backgroundColor: '#f2f2f7', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
-  quickActionText: { fontSize: 13, color: '#007AFF', fontWeight: '500' },
-
-  // View all debts
-  viewAllDebtsBtn: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 14,
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.sm,
+    paddingVertical: Spacing.sm + 2,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#007AFF',
-    marginTop: 4,
+    borderColor: Colors.danger,
   },
-  viewAllDebtsText: { fontSize: 15, color: '#007AFF', fontWeight: '600' },
+  rejectBtnText: {
+    color: Colors.danger,
+    fontSize: FontSizes.sm,
+    fontWeight: FontWeights.semibold,
+  },
 
-  // REV-S5: chỉ xem
+  // ── Quick actions ─────────────────────────────────────────────
+  quickActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  quickActionBtn: {
+    backgroundColor: Colors.primaryLight,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  quickActionText: {
+    fontSize: FontSizes.sm,
+    color: Colors.primaryDark,
+    fontWeight: FontWeights.medium,
+  },
+
+  // ── View all debts ────────────────────────────────────────────
+  viewAllDebtsBtn: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.md,
+    paddingVertical: Spacing.md + 2,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    marginTop: Spacing.xs,
+  },
+  viewAllDebtsText: {
+    fontSize: FontSizes.md,
+    color: Colors.primary,
+    fontWeight: FontWeights.semibold,
+  },
+
+  // ── REV-S5: chỉ xem ──────────────────────────────────────────
   readOnlyBanner: {
-    margin: 16, padding: 14, borderRadius: 12, gap: 4,
-    backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#D1D1D6',
+    marginHorizontal: Spacing.lg,
+    marginVertical: Spacing.md,
+    padding: Spacing.lg,
+    borderRadius: Radii.md,
+    gap: Spacing.xs,
+    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: Colors.primaryMuted,
   },
-  readOnlyTitle: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
-  readOnlyText: { fontSize: 13, color: '#666' },
+  readOnlyTitle: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+    color: Colors.primaryDark,
+  },
+  readOnlyText: {
+    fontSize: FontSizes.sm,
+    color: Colors.primaryDark,
+    opacity: 0.8,
+    lineHeight: 18,
+  },
 
-  // REV-S6: tình trạng cá nhân + nhãn "Chưa đồng bộ"
-  myPositionBox: { backgroundColor: '#E3F2FD', padding: 14, borderRadius: 10, marginBottom: 8 },
-  myPositionText: { fontSize: 15, fontWeight: '600', color: '#1565C0' },
-  unsyncedLabel: { fontSize: 13, color: '#E65100', marginBottom: 4 },
+  // ── REV-S6: tình trạng cá nhân + nhãn "Chưa đồng bộ" ────────
+  myPositionBox: {
+    backgroundColor: Colors.primaryLight,
+    padding: Spacing.lg,
+    borderRadius: Radii.md,
+    marginBottom: Spacing.sm,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.primary,
+  },
+  myPositionText: {
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+    color: Colors.primaryDark,
+  },
+  unsyncedLabel: {
+    fontSize: FontSizes.sm,
+    color: Colors.warningDark,
+    marginBottom: Spacing.xs,
+  },
 
-  // APP-08: Chưa đồng bộ
+  // ── APP-08: Chưa đồng bộ ─────────────────────────────────────
   unsyncedRow: {
-    backgroundColor: '#FFF8E1', padding: 12, borderRadius: 10, gap: 2,
-    borderLeftWidth: 4, borderLeftColor: '#FFB300',
+    backgroundColor: Colors.warningLight,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.sm,
+    gap: 2,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.warning,
   },
-  unsyncedText: { fontSize: 14, color: '#5D4037', fontWeight: '500' },
-  unsyncedBadge: { fontSize: 12, color: '#E65100' },
-  unsyncedFailed: { fontSize: 12, color: '#C62828' },
+  unsyncedText: {
+    fontSize: FontSizes.sm,
+    color: Colors.warningDark,
+    fontWeight: FontWeights.medium,
+  },
+  unsyncedBadge: { fontSize: FontSizes.xs, color: Colors.warningDark },
+  unsyncedFailed: { fontSize: FontSizes.xs, color: Colors.dangerDark },
+
+  // ── Bottom spacer ─────────────────────────────────────────────
+  bottomSpacer: { height: Spacing.xxl },
 });

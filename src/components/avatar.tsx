@@ -7,8 +7,18 @@ import React, { useState } from 'react';
 import { PixelRatio, StyleSheet, Text, View, type ImageStyle, type StyleProp, type ViewStyle } from 'react-native';
 
 import { imageUrl } from '@/api/images';
+import { Colors } from '@/lib/theme';
 
-const COLORS = ['#007AFF', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#FF3B30', '#5856D6'];
+const COLORS = [
+  Colors.primary,   // teal
+  Colors.success,   // emerald
+  Colors.warning,   // amber
+  '#8B5CF6',        // violet
+  '#EC4899',        // pink
+  '#06B6D4',        // cyan
+  Colors.danger,    // red
+  '#6366F1',        // indigo
+];
 
 /** Màu ổn định theo chuỗi (id / tên) để cùng một người luôn cùng màu. */
 export function avatarColor(seed: string | null | undefined): string {
@@ -43,7 +53,7 @@ export function Avatar({ name, path, size = 40, color, seed, localUri, style }: 
     return (
       <Image
         source={{ uri }}
-        style={[{ width: size, height: size, borderRadius: radius, backgroundColor: '#E5E5EA' }, style as StyleProp<ImageStyle>]}
+        style={[{ width: size, height: size, borderRadius: radius, backgroundColor: Colors.border }, style as StyleProp<ImageStyle>]}
         contentFit="cover"
         cachePolicy="memory-disk"
         transition={150}
@@ -68,5 +78,5 @@ export function Avatar({ name, path, size = 40, color, seed, localUri, style }: 
 
 const styles = StyleSheet.create({
   fallback: { justifyContent: 'center', alignItems: 'center' },
-  letter: { color: '#fff', fontWeight: '700' },
+  letter: { color: Colors.textInverse, fontWeight: '700' },
 });

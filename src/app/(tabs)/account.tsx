@@ -16,6 +16,14 @@ import { toUserMessage } from '@/api/errors';
 import { fetchProfile } from '@/api/profiles';
 import { Avatar } from '@/components/avatar';
 import { useAuth } from '@/hooks/use-auth';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
+
+const MENU_ITEMS = [
+  { label: 'Hồ sơ', icon: '👤', route: '/account/profile' },
+  { label: 'Bảo mật', icon: '🔒', route: '/account/security' },
+  { label: 'Quyền riêng tư', icon: '🛡️', route: '/account/privacy' },
+  { label: 'Phương thức thanh toán', icon: '💳', route: '/account/payment-methods' },
+] as const;
 
 export default function AccountScreen() {
   const { user, signOut } = useAuth();
@@ -49,64 +57,68 @@ export default function AccountScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
         {/* Profile card */}
         <View style={styles.profileCard}>
-          <Avatar
-            name={profile?.display_name || user?.user_metadata?.display_name || user?.email}
-            path={profile?.avatar_path}
-            seed={profile?.id ?? user?.id}
-            size={64}
-            style={styles.avatar}
-          />
+          {/* Teal gradient-like banner behind avatar */}
+          <View style={styles.profileBanner}>
+            <View style={styles.bannerLayer1} />
+            <View style={styles.bannerLayer2} />
+          </View>
+
+          <View style={styles.avatarWrapper}>
+            <Avatar
+              name={profile?.display_name || user?.user_metadata?.display_name || user?.email}
+              path={profile?.avatar_path}
+              seed={profile?.id ?? user?.id}
+              size={72}
+              style={styles.avatar}
+            />
+          </View>
+
           <Text style={styles.name}>
             {profile?.display_name || user?.user_metadata?.display_name || 'Người dùng'}
           </Text>
           <Text style={styles.email}>{user?.email}</Text>
           {profile?.user_code && (
-            <Text style={styles.userCode}>Mã: {profile.user_code}</Text>
+            <View style={styles.userCodeBadge}>
+              <Text style={styles.userCodeText}>Mã: {profile.user_code}</Text>
+            </View>
           )}
         </View>
 
         {/* Menu items */}
         <View style={styles.menuGroup}>
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => router.push('/account/profile' as any)}
-          >
-            <Text style={styles.menuItemText}>Hồ sơ</Text>
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>
-          <View style={styles.menuDivider} />
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => router.push('/account/security' as any)}
-          >
-            <Text style={styles.menuItemText}>Bảo mật</Text>
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>
-          <View style={styles.menuDivider} />
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => router.push('/account/privacy' as any)}
-          >
-            <Text style={styles.menuItemText}>Quyền riêng tư</Text>
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>
-          <View style={styles.menuDivider} />
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => router.push('/account/payment-methods' as any)}
-          >
-            <Text style={styles.menuItemText}>Phương thức thanh toán</Text>
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>
+          {MENU_ITEMS.map((item, index) => (
+            <React.Fragment key={item.route}>
+              {index > 0 && <View style={styles.menuDivider} />}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.menuItem,
+                  pressed && styles.menuItemPressed,
+                ]}
+                onPress={() => router.push(item.route as any)}
+              >
+                <View style={styles.menuItemLeft}>
+                  <Text style={styles.menuIcon}>{item.icon}</Text>
+                  <Text style={styles.menuItemText}>{item.label}</Text>
+                </View>
+                <Text style={styles.chevron}>›</Text>
+              </Pressable>
+            </React.Fragment>
+          ))}
         </View>
 
         {/* Sign out */}
-        <Pressable style={styles.signOutBtn} onPress={handleSignOut}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.signOutBtn,
+            pressed && styles.signOutBtnPressed,
+          ]}
+          onPress={handleSignOut}
+        >
           <Text style={styles.signOutText}>Đăng xuất</Text>
         </Pressable>
 
         {isLoading && (
-          <ActivityIndicator style={styles.loader} size="small" color="#007AFF" />
+          <ActivityIndicator style={styles.loader} size="small" color={Colors.primary} />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -114,66 +126,144 @@ export default function AccountScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f7' },
-  scrollView: { flex: 1 },
-  content: { padding: 16, gap: 24 },
-  profileCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
   },
-  avatar: { marginBottom: 8 },
-  name: { fontSize: 20, fontWeight: '600', color: '#1a1a1a' },
-  email: { fontSize: 14, color: '#8E8E93' },
-  userCode: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  menuGroup: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
+  scrollView: {
+    flex: 1,
+  },
+  content: {
+    padding: Spacing.lg,
+    gap: Spacing.xl,
+    paddingBottom: Spacing.xxxl,
+  },
+
+  // ── Profile Card ──────────────────────────────────────────
+  profileCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    alignItems: 'center',
+    paddingBottom: Spacing.xxl,
+    ...Shadows.md,
+  },
+  profileBanner: {
+    width: '100%',
+    height: 80,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  bannerLayer1: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: Colors.primary,
+    opacity: 0.9,
+  },
+  bannerLayer2: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: Colors.primaryDark,
+    opacity: 0.4,
+    borderBottomLeftRadius: 100,
+    borderBottomRightRadius: 100,
+    transform: [{ scaleX: 1.5 }],
+  },
+  avatarWrapper: {
+    marginTop: -36,
+    borderRadius: 40,
+    borderWidth: 3,
+    borderColor: Colors.surface,
+    ...Shadows.md,
+  },
+  avatar: {
+    // no extra margin needed — wrapper handles positioning
+  },
+  name: {
+    fontSize: FontSizes.xl,
+    fontWeight: FontWeights.semibold,
+    color: Colors.text,
+    marginTop: Spacing.md,
+  },
+  email: {
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+    marginTop: Spacing.xs,
+  },
+  userCodeBadge: {
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radii.full,
+  },
+  userCodeText: {
+    fontSize: FontSizes.xs,
+    color: Colors.primaryDark,
+    fontWeight: FontWeights.medium,
+  },
+
+  // ── Menu Group ────────────────────────────────────────────
+  menuGroup: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    overflow: 'hidden',
+    ...Shadows.sm,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    paddingHorizontal: 20,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    minHeight: 52,
+  },
+  menuItemPressed: {
+    backgroundColor: Colors.borderLight,
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  menuIcon: {
+    fontSize: FontSizes.lg,
+    width: 28,
+    textAlign: 'center',
   },
   menuItemText: {
-    fontSize: 16,
-    color: '#1a1a1a',
+    fontSize: FontSizes.md,
+    color: Colors.text,
+    fontWeight: FontWeights.medium,
   },
   chevron: {
     fontSize: 22,
-    color: '#C7C7CC',
-    fontWeight: '600',
+    color: Colors.textTertiary,
+    fontWeight: FontWeights.semibold,
   },
   menuDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E5E5EA',
-    marginLeft: 20,
+    backgroundColor: Colors.border,
+    marginLeft: 60,
   },
+
+  // ── Sign Out ──────────────────────────────────────────────
   signOutBtn: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.md,
+    paddingVertical: Spacing.lg,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#FF3B30',
+    borderWidth: 1.5,
+    borderColor: Colors.danger,
+    ...Shadows.sm,
   },
-  signOutText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
+  signOutBtnPressed: {
+    backgroundColor: Colors.dangerLight,
+  },
+  signOutText: {
+    color: Colors.danger,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
+  },
   loader: {
-    marginTop: 8,
+    marginTop: Spacing.sm,
   },
 });

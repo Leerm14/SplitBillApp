@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toUserMessage } from '@/api/errors';
 import { resetPasswordForEmail } from '@/api/auth';
+import { Colors, Spacing, Radii, FontSizes, FontWeights, Shadows } from '@/lib/theme';
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -45,16 +46,22 @@ export default function ForgotPasswordScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.content}
       >
-        <Text style={styles.title}>Quên mật khẩu</Text>
-        <Text style={styles.subtitle}>
-          Nhập email để nhận link đặt lại mật khẩu
-        </Text>
+        {/* Softer, empathetic hero with lock icon */}
+        <View style={styles.heroSection}>
+          <View style={styles.iconCircle}>
+            <Text style={styles.iconEmoji}>🔑</Text>
+          </View>
+          <Text style={styles.title}>Quên mật khẩu</Text>
+          <Text style={styles.subtitle}>
+            Đừng lo, hãy nhập email để nhận link đặt lại mật khẩu
+          </Text>
+        </View>
 
         <View style={styles.form}>
           <TextInput
             style={styles.input}
             placeholder="Email"
-            placeholderTextColor="#999"
+            placeholderTextColor={Colors.textTertiary}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -68,7 +75,7 @@ export default function ForgotPasswordScreen() {
             disabled={loading}
           >
             {loading ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={Colors.textInverse} />
             ) : (
               <Text style={styles.buttonText}>Gửi link đặt lại</Text>
             )}
@@ -90,63 +97,83 @@ export default function ForgotPasswordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.background,
   },
   content: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: Spacing.xxl,
+  },
+  heroSection: {
+    alignItems: 'center',
+    marginBottom: Spacing.xxxl + Spacing.sm,
+  },
+  iconCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: Colors.accentLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.xl,
+  },
+  iconEmoji: {
+    fontSize: 36,
   },
   title: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: FontSizes.xxxl,
+    fontWeight: FontWeights.bold,
     textAlign: 'center',
-    color: '#1a1a1a',
+    color: Colors.text,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: FontSizes.md,
+    color: Colors.textSecondary,
     textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 40,
+    marginTop: Spacing.sm,
+    lineHeight: 22,
+    paddingHorizontal: Spacing.lg,
   },
   form: {
-    gap: 16,
+    gap: Spacing.lg,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
-    color: '#1a1a1a',
+    borderColor: Colors.border,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
+    fontSize: FontSizes.md,
+    backgroundColor: Colors.borderLight,
+    color: Colors.text,
   },
   button: {
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
+    padding: Spacing.lg,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: Spacing.sm,
+    ...Shadows.colored(Colors.primary),
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    color: Colors.textInverse,
+    fontSize: FontSizes.md,
+    fontWeight: FontWeights.semibold,
   },
   linkButton: {
     alignItems: 'center',
-    padding: 12,
+    paddingVertical: Spacing.md,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   linkText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
   },
   linkBold: {
-    color: '#007AFF',
-    fontWeight: '600',
+    color: Colors.primary,
+    fontWeight: FontWeights.semibold,
   },
 });

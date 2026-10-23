@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { showImageActions } from '@/lib/pick-image';
+import { Colors, Spacing, Radii, FontSizes } from '@/lib/theme';
 
 /** Xem ảnh toàn màn hình, chạm để đóng. */
 export function ReceiptViewer({ uri, visible, onClose }: { uri: string | null; visible: boolean; onClose: () => void }) {
@@ -56,7 +57,7 @@ export function ReceiptPicker({ localUri, remoteUrl, remoteLoading, remoteError,
           <Image source={{ uri: shownUri }} style={styles.preview} contentFit="cover" />
         ) : remoteLoading ? (
           <View style={styles.placeholder}>
-            <ActivityIndicator color="#8E8E93" />
+            <ActivityIndicator color={Colors.textTertiary} />
           </View>
         ) : (
           <View style={styles.placeholder}>
@@ -75,19 +76,19 @@ export function ReceiptPicker({ localUri, remoteUrl, remoteLoading, remoteError,
 
 const styles = StyleSheet.create({
   picker: {
-    borderRadius: 12,
+    borderRadius: Radii.md,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Colors.border,
     borderStyle: 'dashed',
-    backgroundColor: '#fff',
+    backgroundColor: Colors.surface,
   },
   preview: { width: '100%', height: 200 },
-  placeholder: { height: 100, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f9f9f9', gap: 4, padding: 8 },
+  placeholder: { height: 100, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.borderLight, gap: Spacing.xs, padding: Spacing.sm },
   placeholderIcon: { fontSize: 24 },
-  placeholderText: { fontSize: 14, color: '#8E8E93', textAlign: 'center' },
-  hint: { fontSize: 12, color: '#8E8E93', marginTop: -4 },
+  placeholderText: { fontSize: FontSizes.md - 1, color: Colors.textTertiary, textAlign: 'center' },
+  hint: { fontSize: FontSizes.xs + 1, color: Colors.textTertiary, marginTop: -4 },
   viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center' },
   viewerImage: { width: '94%', height: '78%' },
-  viewerHint: { color: '#fff', fontSize: 15, marginTop: 16 },
+  viewerHint: { color: Colors.textInverse, fontSize: FontSizes.md, marginTop: Spacing.lg },
 });
