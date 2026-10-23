@@ -6,7 +6,7 @@
  * - APP-12: thời điểm đồng bộ gần nhất lấy từ cache TanStack Query (dataUpdatedAt)
  */
 
-import { useQuery, useQueryClient, type QueryCache } from '@tanstack/react-query';
+import { notifyManager, useQuery, useQueryClient, type QueryCache } from '@tanstack/react-query';
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 
@@ -43,7 +43,25 @@ function latestDataUpdatedAt(cache: QueryCache): number {
 
 export function useLastSyncedAt(): Date | null {
   const cache = useQueryClient().getQueryCache();
-  const subscribe = useCallback((cb: () => void) => cache.subscribe(cb), [cache]);
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      // QueryCache báo đồng bộ ngay cả khi một useQuery tạo query trong lúc render → gọi cb lúc đó
+      // làm React cập nhật AuthGate giữa render ("Cannot update a component while rendering").
+      // batchCalls hoãn sang lượt sau, giống useIsFetching của TanStack.
+      const notify = notifyManager.batchCalls(cb);
+      return cache.subscribe((event) => {
+        // Chỉ các sự kiện có thể đổi dataUpdatedAt: tải xong, xóa query, khôi phục từ cache đã lưu
+        if (
+          (event.type === 'updated' && event.action.type === 'success') ||
+          event.type === 'removed' ||
+          (event.type === 'added' && event.query.state.dataUpdatedAt > 0)
+        ) {
+          notify();
+        }
+      });
+    },
+    [cache],
+  );
   const ts = useSyncExternalStore(subscribe, () => latestDataUpdatedAt(cache), () => 0);
   return ts > 0 ? new Date(ts) : null;
 }

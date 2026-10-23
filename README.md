@@ -89,6 +89,27 @@ npx expo start
 
 > **Lưu ý:** React Native / Expo không giống app Android thuần. Code chính viết bằng TypeScript/JavaScript, Android Studio chỉ build phần native shell. Cả Metro bundler và Android Studio phải chạy đồng thời để app hoạt động.
 
+## Tài khoản test (Mock Data)
+
+Dự án có sẵn file seed data tại `supabase/seed.sql`. Để tạo dữ liệu mẫu, vào **Supabase Dashboard → SQL Editor**, paste nội dung file `seed.sql` và chạy.
+
+### Tài khoản đăng nhập
+
+| Email                  | Mật khẩu   | Tên             | Vai trò           |
+| ---------------------- | ---------- | --------------- | ----------------- |
+| demo@splitbill.test    | Demo123!   | Nguyễn Văn An   | Chủ nhóm          |
+| demo2@splitbill.test   | Demo123!   | Trần Thị Bình   | Thành viên        |
+| demo3@splitbill.test   | Demo123!   | Lê Hoàng Cường  | Thành viên        |
+| demo4@splitbill.test   | Demo123!   | Phạm Minh Dũng  | Thành viên        |
+
+### Dữ liệu mẫu bao gồm
+
+- **2 nhóm**: "Đi Đà Lạt 🏔️" (4 người) và "Ăn trưa Công ty 🍜" (3 người)
+- **4 khoản chi**: Khách sạn, ăn tối, thuê xe, bún bò (tổng ~4 triệu VNĐ)
+- **2 thanh toán**: 1 đang chờ (PENDING), 1 đã xác nhận (CONFIRMED)
+- **Bạn bè**: An ↔ Bình, An ↔ Cường (đã kết bạn), Dũng → An (đang chờ)
+- **Thông tin thanh toán**: Tài khoản ngân hàng, MoMo
+
 ## Các lệnh hữu ích
 
 | Lệnh                      | Mô tả                                  |
